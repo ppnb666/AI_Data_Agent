@@ -9,14 +9,15 @@ from utils.analysis import (
     generate_summary,
     generate_report
 )
-from utils.data_parser import detect_columns  # ← 导入检测器
+from utils.data_parser import detect_columns
+from utils.visualization import plot_product_sales  # ← 新增
 
 
 def analyze_excel(file_path, report_path):
     # 读取Excel
     df = pd.read_excel(file_path)
 
-    # ===== 自动检测列名 =====
+    # 自动检测列名
     columns = detect_columns(df)
     sales_col = columns.get('sales_column')
     product_col = columns.get('product_column')
@@ -27,7 +28,6 @@ def analyze_excel(file_path, report_path):
     print(f"产品列：{product_col}")
     print(f"日期列：{columns.get('date_column')}")
 
-    # 如果没找到关键列，报错提示
     if sales_col is None:
         print("⚠️ 警告：未找到销售额列，请检查数据格式！")
         return
@@ -55,14 +55,14 @@ def analyze_excel(file_path, report_path):
     print("重复数据：")
     print(check_duplicates(df))
 
-    # 销售冠军（使用检测到的列名）
+    # 销售冠军
     print("\n" + "=" * 50)
     top_product, top_sales = get_top_product(df, sales_col, product_col)
 
     print(f"最高销售产品：{top_product}")
     print(f"销售额：{top_sales}")
 
-    # 异常检测（使用检测到的销售额列）
+    # 异常检测
     print("\n" + "=" * 50)
     print("异常销售数据：")
     print(detect_outliers(df, sales_col))
@@ -74,6 +74,14 @@ def analyze_excel(file_path, report_path):
 
     for key, value in summary.items():
         print(f"{key}:{value}")
+
+    # ===== 新增：生成可视化图表 =====
+    print("\n" + "=" * 50)
+    print("正在生成图表...")
+
+    chart_path = "reports/product_sales.png"
+    plot_product_sales(df, product_col, sales_col, chart_path)
+    print(f"图表已保存：{chart_path}")
 
     # 生成报告
     report = generate_report(df, clean_count, top_product, top_sales)
