@@ -1,5 +1,3 @@
-
-
 import pandas as pd
 
 
@@ -23,7 +21,6 @@ def clean_data(df):
     return df, clean_count
 
 
-
 def check_missing_values(df):
     """
     检查缺失值
@@ -34,14 +31,12 @@ def check_missing_values(df):
     return missing[missing > 0]
 
 
-
 def check_duplicates(df):
     """
     检查重复数据
     """
 
     return df.duplicated().sum()
-
 
 
 def get_top_product(df, sales_column, product_column):
@@ -52,51 +47,32 @@ def get_top_product(df, sales_column, product_column):
     if df.empty:
         return "无数据", 0
 
-
     product_sales = (
         df.groupby(product_column)[sales_column]
         .sum()
     )
 
-
     top_product = product_sales.idxmax()
 
     top_sales = product_sales.max()
 
-
     return top_product, top_sales
-
 
 
 def detect_outliers(df, column):
     """
-    使用IQR方法检测异常值
+    简单异常检测
 
-    规则：
-    大于 Q3 + 1.5*IQR 的数据认为是异常
-    小于 Q1 - 1.5*IQR 的数据认为是异常
+    超过平均值2倍认为异常
     """
 
-    Q1 = df[column].quantile(0.25)
-
-    Q3 = df[column].quantile(0.75)
-
-    IQR = Q3 - Q1
-
-
-    lower_bound = Q1 - 1.5 * IQR
-
-    upper_bound = Q3 + 1.5 * IQR
-
+    mean_value = df[column].mean()
 
     outliers = df[
-        (df[column] < lower_bound) |
-        (df[column] > upper_bound)
+        df[column] > mean_value * 2
     ]
 
-
     return outliers
-
 
 
 def generate_summary(df):
@@ -117,9 +93,7 @@ def generate_summary(df):
 
     }
 
-
     return summary
-
 
 
 def generate_report(
@@ -128,7 +102,6 @@ def generate_report(
         top_product,
         top_sales
 ):
-
     """
     生成文本报告
     """
@@ -139,31 +112,25 @@ def generate_report(
         "====== 数据分析报告 ======\n"
     )
 
-
     report.append(
         f"数据总量：{len(df)} 条\n"
     )
-
 
     report.append(
         f"清洗删除数据：{clean_count} 条\n"
     )
 
-
     report.append(
         f"销售额最高产品：{top_product}\n"
     )
-
 
     report.append(
         f"最高销售额：{top_sales}\n"
     )
 
-
     report.append(
         "\n字段信息：\n"
     )
-
 
     for col in df.columns:
 
@@ -171,8 +138,8 @@ def generate_report(
             f"- {col}\n"
         )
 
-
     return "".join(report)
+
 
 def generate_markdown_report(
         df,
@@ -189,58 +156,33 @@ def generate_markdown_report(
 
     report.append("# 数据分析报告\n\n")
 
-
     # 数据概览
     report.append("## 1. 数据概览\n\n")
-
-    report.append(
-        f"- 数据总量：{len(df)} 条\n"
-    )
-
-    report.append(
-        f"- 清洗删除数据：{clean_count} 条\n"
-    )
-
-    report.append(
-        f"- 字段数量：{len(df.columns)} 个\n\n"
-    )
-
+    report.append(f"- 数据总量：{len(df)} 条\n")
+    report.append(f"- 清洗删除数据：{clean_count} 条\n")
+    report.append(f"- 字段数量：{len(df.columns)} 个\n\n")
 
     # 销售分析
     report.append("## 2. 销售分析\n\n")
-
-    report.append(
-        f"- 销售最高产品：{top_product}\n"
-    )
-
-    report.append(
-        f"- 最高销售额：{top_sales}\n\n"
-    )
-
+    report.append(f"- 销售最高产品：{top_product}\n")
+    report.append(f"- 最高销售额：{top_sales}\n\n")
 
     # 异常检测
     report.append("## 3. 异常检测\n\n")
-
-    report.append(
-        f"- 发现异常数据：{len(outliers)} 条\n\n"
-    )
-
+    report.append(f"- 发现异常数据：{len(outliers)} 条\n\n")
 
     # 字段信息
     report.append("## 4. 字段信息\n\n")
-
     for col in df.columns:
-        report.append(
-            f"- {col}\n"
-        )
+        report.append(f"- {col}\n")
 
-
-    # 图片
+    # ===== 数据可视化（两张图） =====
     report.append("\n## 5. 数据可视化\n\n")
 
-    report.append(
-        "![产品销售额柱状图](product_sales.png)\n"
-    )
+    report.append("### 产品销售排行\n\n")
+    report.append("![产品销售额柱状图](product_sales.png)\n\n")
 
+    report.append("### 销售趋势\n\n")
+    report.append("![销售趋势图](sales_trend.png)\n")
 
     return "".join(report)

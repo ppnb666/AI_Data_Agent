@@ -1,10 +1,11 @@
 import pandas as pd
-import logging  # ← 新增
+import logging
 from config import (
     DATA_PATH,
     REPORT_PATH,
     CHART_PATH,
-    MD_REPORT_PATH
+    MD_REPORT_PATH,
+    TREND_CHART_PATH
 )
 from utils.analysis import (
     clean_data,
@@ -17,10 +18,10 @@ from utils.analysis import (
     generate_markdown_report
 )
 from utils.data_parser import detect_columns
-from utils.visualization import plot_product_sales
+from utils.visualization import plot_product_sales, plot_sales_trend
 
 
-def analyze_excel(file_path, report_path, chart_path, md_path):
+def analyze_excel(file_path, report_path, chart_path, md_path, trend_path):
     # 获取日志记录器
     logger = logging.getLogger()
 
@@ -50,6 +51,8 @@ def analyze_excel(file_path, report_path, chart_path, md_path):
         if product_col is None:
             logger.error("未找到产品列，请检查数据格式！")
             return
+        if date_col is None:
+            logger.warning("未找到日期列，部分功能（如趋势图）可能无法使用")
 
         # 数据预览
         logger.info("原始数据预览：")
@@ -96,19 +99,29 @@ def analyze_excel(file_path, report_path, chart_path, md_path):
         for key, value in summary.items():
             logger.info(f"  {key}：{value}")
 
-        # 生成可视化图表
+        # ===== 生成可视化图表 =====
         logger.info("生成可视化图表...")
-        plot_product_sales(df, product_col, sales_col, chart_path)
-        logger.info(f"图表已保存：{chart_path}")
 
-        # 生成 TXT 报告
+        # 柱状图：产品销售排行
+        if product_col is not None and sales_col is not None:
+            plot_product_sales(df, product_col, sales_col, chart_path)
+            logger.info(f"销售排行图已保存：{chart_path}")
+
+        # 折线图：销售趋势
+        if date_col is not None and sales_col is not None:
+            plot_sales_trend(df, date_col, sales_col, trend_path)
+            logger.info(f"销售趋势图已保存：{trend_path}")
+        else:
+            logger.warning("缺少日期列，跳过生成趋势图")
+
+        # ===== 生成 TXT 报告 =====
         logger.info("生成 TXT 报告...")
         report = generate_report(df, clean_count, top_product, top_sales)
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(report)
         logger.info(f"TXT 报告已生成：{report_path}")
 
-        # 生成 Markdown 报告
+        # ===== 生成 Markdown 报告 =====
         logger.info("生成 Markdown 报告...")
         md_report = generate_markdown_report(
             df,
@@ -140,4 +153,10 @@ if __name__ == "__main__":
     # 创建日志实例，同时输出到控制台和文件
     logger = setup_logger(console_output=True)
 
-    analyze_excel(DATA_PATH, REPORT_PATH, CHART_PATH, MD_REPORT_PATH)
+    analyze_excel(
+        DATA_PATH,
+        REPORT_PATH,
+        CHART_PATH,
+        MD_REPORT_PATH,
+        TREND_CHART_PATH
+    )

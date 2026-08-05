@@ -3,20 +3,12 @@
 # ============================================================
 
 # -------------------- 数据路径 --------------------
-# 输入数据文件（Excel 格式）
 DATA_PATH = "data/sales.xlsx"
 
 # -------------------- 报告路径 --------------------
-# TXT 格式报告
 REPORT_PATH = "reports/report.txt"
-
-# Markdown 格式报告
 MD_REPORT_PATH = "reports/analysis_report.md"
 
-# 图表图片路径
+# -------------------- 图表路径 --------------------
 CHART_PATH = "reports/product_sales.png"
-
-# -------------------- 列名映射（可选） --------------------
-# 如果自动检测失败，可以在这里手动指定列名
-# COLUMN_SALES = "销售额"
-# COLUMN_PRODUCT = "产品"
+TREND_CHART_PATH = "reports/sales_trend.png"
