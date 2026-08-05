@@ -70,16 +70,30 @@ def get_top_product(df, sales_column, product_column):
 
 def detect_outliers(df, column):
     """
-    简单异常检测
+    使用IQR方法检测异常值
 
-    超过平均值2倍认为异常
+    规则：
+    大于 Q3 + 1.5*IQR 的数据认为是异常
+    小于 Q1 - 1.5*IQR 的数据认为是异常
     """
 
-    mean_value = df[column].mean()
+    Q1 = df[column].quantile(0.25)
+
+    Q3 = df[column].quantile(0.75)
+
+    IQR = Q3 - Q1
+
+
+    lower_bound = Q1 - 1.5 * IQR
+
+    upper_bound = Q3 + 1.5 * IQR
+
 
     outliers = df[
-        df[column] > mean_value * 2
+        (df[column] < lower_bound) |
+        (df[column] > upper_bound)
     ]
+
 
     return outliers
 
