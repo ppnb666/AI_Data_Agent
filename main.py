@@ -1,5 +1,10 @@
 import pandas as pd
-from config import DATA_PATH, REPORT_PATH
+from config import (
+    DATA_PATH,
+    REPORT_PATH,
+    CHART_PATH,
+    MD_REPORT_PATH
+)
 from utils.analysis import (
     clean_data,
     check_missing_values,
@@ -8,13 +13,13 @@ from utils.analysis import (
     detect_outliers,
     generate_summary,
     generate_report,
-    generate_markdown_report  # ← 新增导入
+    generate_markdown_report
 )
 from utils.data_parser import detect_columns
 from utils.visualization import plot_product_sales
 
 
-def analyze_excel(file_path, report_path):
+def analyze_excel(file_path, report_path, chart_path, md_path):
     # 读取Excel
     df = pd.read_excel(file_path)
 
@@ -81,11 +86,10 @@ def analyze_excel(file_path, report_path):
     print("\n" + "=" * 50)
     print("正在生成图表...")
 
-    chart_path = "reports/product_sales.png"
     plot_product_sales(df, product_col, sales_col, chart_path)
     print(f"图表已保存：{chart_path}")
 
-    # ===== 生成 TXT 报告 =====
+    # 生成 TXT 报告
     report = generate_report(df, clean_count, top_product, top_sales)
 
     with open(report_path, "w", encoding="utf-8") as f:
@@ -93,7 +97,7 @@ def analyze_excel(file_path, report_path):
 
     print(f"\nTXT 报告已生成：{report_path}")
 
-    # ===== 生成 Markdown 报告（新增） =====
+    # 生成 Markdown 报告
     md_report = generate_markdown_report(
         df,
         clean_count,
@@ -102,8 +106,6 @@ def analyze_excel(file_path, report_path):
         outliers
     )
 
-    md_path = "reports/report.md"  # Markdown 报告路径
-
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_report)
 
@@ -111,4 +113,4 @@ def analyze_excel(file_path, report_path):
 
 
 if __name__ == "__main__":
-    analyze_excel(DATA_PATH, REPORT_PATH)
+    analyze_excel(DATA_PATH, REPORT_PATH, CHART_PATH, MD_REPORT_PATH)
