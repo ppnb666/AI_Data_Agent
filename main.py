@@ -7,10 +7,11 @@ from utils.analysis import (
     get_top_product,
     detect_outliers,
     generate_summary,
-    generate_report
+    generate_report,
+    generate_markdown_report  # ← 新增导入
 )
 from utils.data_parser import detect_columns
-from utils.visualization import plot_product_sales  # ← 新增
+from utils.visualization import plot_product_sales
 
 
 def analyze_excel(file_path, report_path):
@@ -64,8 +65,9 @@ def analyze_excel(file_path, report_path):
 
     # 异常检测
     print("\n" + "=" * 50)
+    outliers = detect_outliers(df, sales_col)
     print("异常销售数据：")
-    print(detect_outliers(df, sales_col))
+    print(outliers)
 
     # 数据摘要
     print("\n" + "=" * 50)
@@ -75,7 +77,7 @@ def analyze_excel(file_path, report_path):
     for key, value in summary.items():
         print(f"{key}:{value}")
 
-    # ===== 新增：生成可视化图表 =====
+    # 生成可视化图表
     print("\n" + "=" * 50)
     print("正在生成图表...")
 
@@ -83,13 +85,29 @@ def analyze_excel(file_path, report_path):
     plot_product_sales(df, product_col, sales_col, chart_path)
     print(f"图表已保存：{chart_path}")
 
-    # 生成报告
+    # ===== 生成 TXT 报告 =====
     report = generate_report(df, clean_count, top_product, top_sales)
 
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
 
-    print(f"\n报告已经生成：{report_path}")
+    print(f"\nTXT 报告已生成：{report_path}")
+
+    # ===== 生成 Markdown 报告（新增） =====
+    md_report = generate_markdown_report(
+        df,
+        clean_count,
+        top_product,
+        top_sales,
+        outliers
+    )
+
+    md_path = "reports/report.md"  # Markdown 报告路径
+
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(md_report)
+
+    print(f"Markdown 报告已生成：{md_path}")
 
 
 if __name__ == "__main__":

@@ -173,3 +173,74 @@ def generate_report(
 
 
     return "".join(report)
+
+def generate_markdown_report(
+        df,
+        clean_count,
+        top_product,
+        top_sales,
+        outliers
+):
+    """
+    生成Markdown格式分析报告
+    """
+
+    report = []
+
+    report.append("# 数据分析报告\n\n")
+
+
+    # 数据概览
+    report.append("## 1. 数据概览\n\n")
+
+    report.append(
+        f"- 数据总量：{len(df)} 条\n"
+    )
+
+    report.append(
+        f"- 清洗删除数据：{clean_count} 条\n"
+    )
+
+    report.append(
+        f"- 字段数量：{len(df.columns)} 个\n\n"
+    )
+
+
+    # 销售分析
+    report.append("## 2. 销售分析\n\n")
+
+    report.append(
+        f"- 销售最高产品：{top_product}\n"
+    )
+
+    report.append(
+        f"- 最高销售额：{top_sales}\n\n"
+    )
+
+
+    # 异常检测
+    report.append("## 3. 异常检测\n\n")
+
+    report.append(
+        f"- 发现异常数据：{len(outliers)} 条\n\n"
+    )
+
+
+    # 字段信息
+    report.append("## 4. 字段信息\n\n")
+
+    for col in df.columns:
+        report.append(
+            f"- {col}\n"
+        )
+
+
+    # 图片
+    report.append("\n## 5. 数据可视化\n\n")
+
+    report.append(
+        "![产品销售额柱状图](product_sales.png)\n"
+    )
+
+
+    return "".join(report)
