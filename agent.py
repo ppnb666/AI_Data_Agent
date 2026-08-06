@@ -133,18 +133,22 @@ class DataAgent:
 
         print("\n执行计划:")
 
-
         for task in plan:
 
+            tool_name = task["tool"]
+
+            reason = task["reason"]
 
             print(
-                "→",
-                task
+                f"执行工具:{tool_name}"
             )
 
+            print(
+                f"原因:{reason}"
+            )
 
-            tool=tool_registry.get_tool(
-                task
+            tool = tool_registry.get_tool(
+                tool_name
             )
 
 
@@ -158,7 +162,7 @@ class DataAgent:
 
 
 
-            if task=="clean_data":
+            if tool_name=="clean_data":
 
 
                 result=func(
@@ -174,7 +178,8 @@ class DataAgent:
 
 
 
-            elif task=="top_product":
+
+            elif tool_name == "top_product":
 
 
                 result=func(
@@ -195,7 +200,8 @@ class DataAgent:
 
 
 
-            elif task=="detect_outliers":
+
+            elif tool_name == "detect_outliers":
 
 
                 result=func(
@@ -210,7 +216,8 @@ class DataAgent:
 
 
 
-            elif task=="create_chart":
+
+            elif tool_name == "create_chart":
 
 
                 func(
@@ -224,7 +231,8 @@ class DataAgent:
 
 
 
-            elif task=="generate_report":
+
+            elif tool_name == "generate_report":
 
 
                 func(
@@ -237,7 +245,8 @@ class DataAgent:
 
 
 
-            elif task=="generate_markdown_report":
+
+            elif tool_name == "generate_markdown_report":
 
 
                 func(
