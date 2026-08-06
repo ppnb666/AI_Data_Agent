@@ -1,6 +1,9 @@
 """
 数据分析工具
+
+v2.2 Agent State版本
 """
+
 
 from utils.analysis import (
     clean_data,
@@ -10,59 +13,92 @@ from utils.analysis import (
 
 
 
-def clean_data_tool(df):
+
+def clean_data_tool(state):
 
     """
     数据清洗工具
+
+    输入:
+        AgentState
+
+    更新:
+        state.df
+        state.clean_count
     """
 
-    result,count = clean_data(df)
 
-    return {
-        "data":result,
-        "clean_count":count
-    }
+    result, count = clean_data(
+        state.df
+    )
 
 
+    # 更新Agent状态
 
-def top_product_tool(
-    df,
-    sales_col,
-    product_col
-):
+    state.df = result
+
+
+    state.clean_count = count
+
+
+
+    return state
+
+
+
+
+
+
+def top_product_tool(state):
 
     """
     销售冠军分析工具
+
+    更新:
+        state.top_product
+        state.top_sales
     """
 
-    product,sales = get_top_product(
-        df,
-        sales_col,
-        product_col
+
+    product, sales = get_top_product(
+        state.df,
+        state.sales_col,
+        state.product_col
     )
 
-    return {
-        "product":product,
-        "sales":sales
-    }
+
+    state.top_product = product
+
+
+    state.top_sales = sales
 
 
 
-def outlier_detection_tool(
-    df,
-    sales_col
-):
+    return state
+
+
+
+
+
+
+def outlier_detection_tool(state):
 
     """
     异常检测工具
+
+    更新:
+        state.outliers
     """
 
+
     result = detect_outliers(
-        df,
-        sales_col
+        state.df,
+        state.sales_col
     )
 
-    return {
-        "count":len(result),
-        "data":result
-    }
+
+    state.outliers = result
+
+
+
+    return state

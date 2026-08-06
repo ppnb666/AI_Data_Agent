@@ -1,6 +1,9 @@
 """
 报告生成工具
+
+v2.2 Agent State版本
 """
+
 
 from utils.analysis import (
     generate_report,
@@ -8,65 +11,72 @@ from utils.analysis import (
 )
 
 
-def generate_report_tool(
-        df,
-        clean_count,
-        top_product,
-        top_sales,
-        report_path
-):
+
+
+def generate_report_tool(state):
+
     """
-    生成文本报告工具
+    生成文本报告
+
+    更新:
+        state.report
     """
+
 
     report = generate_report(
-        df,
-        clean_count,
-        top_product,
-        top_sales
+        state.df,
+        state.clean_count,
+        state.top_product,
+        state.top_sales
     )
 
+
     with open(
-        report_path,
+        state.report_path,
         "w",
         encoding="utf-8"
     ) as f:
+
         f.write(report)
 
-    return {
-        "report_path": report_path
-    }
+
+
+    state.report = report
+
+
+    return state
 
 
 
-def generate_markdown_report_tool(
-        df,
-        clean_count,
-        top_product,
-        top_sales,
-        outliers,
-        md_path
-):
+
+
+def generate_markdown_report_tool(state):
+
     """
-    生成 Markdown报告工具
+    生成Markdown报告
     """
+
 
     md_report = generate_markdown_report(
-        df,
-        clean_count,
-        top_product,
-        top_sales,
-        outliers
+        state.df,
+        state.clean_count,
+        state.top_product,
+        state.top_sales,
+        state.outliers
     )
 
+
     with open(
-        md_path,
+        state.md_report_path,
         "w",
         encoding="utf-8"
     ) as f:
+
         f.write(md_report)
 
 
-    return {
-        "markdown_path": md_path
-    }
+
+    state.md_report = md_report
+
+
+    return state

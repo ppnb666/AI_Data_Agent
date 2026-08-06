@@ -1,54 +1,66 @@
 """
+Tool Registry
+
 Agent工具注册中心
 """
 
-from typing import Dict, Callable
-
 
 class ToolRegistry:
-    """
-    管理Agent可调用工具
-    """
+
 
     def __init__(self):
-        self.tools: Dict[str, Callable] = {}
+
+        self.tools = {}
+
 
 
     def register(
-        self,
-        name: str,
-        description: str,
-        func: Callable
+            self,
+            name,
+            description,
+            function
     ):
-        """
-        注册工具
-        """
+
 
         self.tools[name] = {
-            "description": description,
-            "function": func
+
+
+            "name":
+                name,
+
+
+            "description":
+                description,
+
+
+            "function":
+                function
+
         }
 
 
-    def get_tool(self, name:str):
-        """
-        获取工具
-        """
 
-        return self.tools.get(name)
+    def get_tool(
+            self,
+            name
+    ):
+
+
+        return self.tools.get(
+            name
+        )
+
 
 
     def list_tools(self):
-        """
-        查看所有工具
-        """
-
-        return {
-            name:data["description"]
-            for name,data in self.tools.items()
-        }
 
 
-# 创建全局注册器
+        return self.tools
+
+
+
+
+
+# 全局工具注册中心
 
 tool_registry = ToolRegistry()

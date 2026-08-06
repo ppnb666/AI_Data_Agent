@@ -4,10 +4,10 @@ AI Data Agent
 LLM Planner + Tool Registry
 """
 
+from state import AgentState
+
 import pandas as pd
 import logging
-
-from typing import Dict,Any
 
 
 from config import (
@@ -35,17 +35,16 @@ from planner import TaskPlanner
 
 
 
-
 class DataAgent:
 
 
     def __init__(
             self,
-            llm_client:LLMClient=None
+            llm_client: LLMClient = None
     ):
 
 
-        self.logger=logging.getLogger(
+        self.logger = logging.getLogger(
             __name__
         )
 
@@ -58,86 +57,66 @@ class DataAgent:
         )
 
 
-        # LLM Planner
+        # Planner
 
         self.planner = TaskPlanner(
             self.llm
         )
 
 
-        self.analysis_result={}
+        self.analysis_result = {}
 
-        self.user_query=""
-
+        self.user_query = ""
 
 
 
     def analyze(
             self,
-            file_path,
-            plan
+            state
     ):
 
 
-        df=pd.read_excel(
-            file_path
+        # 读取数据
+
+        df = pd.read_excel(
+            state.file_path
         )
 
 
-        columns=detect_columns(
+        state.df = df
+
+
+
+        # 自动识别字段
+
+        columns = detect_columns(
             df
         )
 
 
-        sales_col=columns.get(
+        state.sales_col = columns.get(
             "sales_column"
         )
 
-        product_col=columns.get(
+        state.product_col = columns.get(
             "product_column"
         )
 
-        date_col=columns.get(
+        state.date_col = columns.get(
             "date_column"
         )
 
 
 
-        context={
-
-            "df":df,
-
-            "sales_col":sales_col,
-
-            "product_col":product_col,
-
-            "date_col":date_col
-
-        }
-
-
-
-        result_data={
-
-            "clean_count":0,
-
-            "top_product":None,
-
-            "top_sales":0,
-
-            "outliers":[]
-
-        }
-
-
-
         print("\n执行计划:")
 
-        for task in plan:
+        for task in state.plan:
 
             tool_name = task["tool"]
 
             reason = task["reason"]
+
+            state.current_tool = tool_name
 
             print(
                 f"执行工具:{tool_name}"
@@ -151,135 +130,70 @@ class DataAgent:
                 tool_name
             )
 
-
             if not tool:
+                print(
+                    f"⚠️ 工具不存在:{tool_name}"
+                )
 
                 continue
 
+            func = tool["function"]
 
+            try:
 
-            func=tool["function"]
-
-
-
-            if tool_name=="clean_data":
-
-
-                result=func(
-                    context["df"]
-                )
-
-
-                context["df"]=result["data"]
-
-                result_data["clean_count"]=(
-                    result["clean_count"]
-                )
-
-
-
-
-            elif tool_name == "top_product":
-
-
-                result=func(
-                    context["df"],
-                    sales_col,
-                    product_col
-                )
-
-
-                result_data["top_product"]=(
-                    result["product"]
-                )
-
-
-                result_data["top_sales"]=(
-                    result["sales"]
-                )
-
-
-
-
-            elif tool_name == "detect_outliers":
-
-
-                result=func(
-                    context["df"],
-                    sales_col
-                )
-
-
-                result_data["outliers"]=(
-                    result["data"]
-                )
-
-
-
-
-            elif tool_name == "create_chart":
-
+                # ⭐统一传递state
 
                 func(
-                    context["df"],
-                    product_col,
-                    sales_col,
-                    CHART_PATH,
-                    date_col,
-                    TREND_CHART_PATH
+                    state
                 )
 
 
+            except Exception as e:
 
+                state.error = str(e)
 
-            elif tool_name == "generate_report":
-
-
-                func(
-                    context["df"],
-                    result_data["clean_count"],
-                    result_data["top_product"],
-                    result_data["top_sales"],
-                    REPORT_PATH
+                print(
+                    f"❌ 工具执行失败:{e}"
                 )
 
+                break
 
 
-
-            elif tool_name == "generate_markdown_report":
-
-
-                func(
-                    context["df"],
-                    result_data["clean_count"],
-                    result_data["top_product"],
-                    result_data["top_sales"],
-                    result_data["outliers"],
-                    MD_REPORT_PATH
-                )
+        # 最终结果
 
         self.analysis_result = {
 
+
             "total_count":
-                len(context["df"]),
+                len(state.df),
+
 
             "clean_count":
-                result_data["clean_count"],
+                state.clean_count,
+
 
             "top_product":
-                result_data["top_product"],
+                state.top_product,
+
 
             "top_sales":
-                result_data["top_sales"],
+                state.top_sales,
+
 
             "outlier_count":
-                len(result_data["outliers"]),
+                len(state.outliers),
+
 
             "columns":
-                list(context["df"].columns)
+                list(state.df.columns)
 
         }
 
+
+
+        state.analysis_result = (
+            self.analysis_result
+        )
 
 
         return self.analysis_result
@@ -299,6 +213,7 @@ class DataAgent:
 
 
 
+
     def run(
             self,
             file_path,
@@ -307,43 +222,57 @@ class DataAgent:
     ):
 
 
-        self.user_query=user_query
+        self.user_query = user_query
 
 
 
-        # ① DeepSeek规划
+        # 创建Agent状态
 
-        plan=self.planner.create_plan(
+        state = AgentState()
+
+
+        state.user_query = user_query
+
+        state.file_path = file_path
+
+
+
+        # Planner生成计划
+
+        state.plan = self.planner.create_plan(
             user_query
         )
+
 
 
         print(
             "\n🤖 AI Planner计划:"
         )
 
-        print(plan)
 
-
-
-        # ② 执行工具
-
-        result=self.analyze(
-            file_path,
-            plan
+        print(
+            state.plan
         )
 
 
 
-        # ③ DeepSeek总结
+        # 执行任务
 
+        result = self.analyze(
+            state
+        )
+
+
+
+        # AI总结
 
         if with_ai:
 
 
-            result["ai_insight"]=(
+            result["ai_insight"] = (
                 self.get_ai_insight()
             )
+
 
 
         return result
@@ -351,19 +280,25 @@ class DataAgent:
 
 
 
+
 def main():
 
 
-    agent=DataAgent()
+    agent = DataAgent()
 
 
-    agent.run(
+    result = agent.run(
         DATA_PATH,
         "帮我分析销售异常，并生成报告"
     )
 
 
+    print("\n==========分析结果==========")
 
-if __name__=="__main__":
+    print(result)
+
+
+
+if __name__ == "__main__":
 
     main()

@@ -1,6 +1,9 @@
 """
 可视化工具
+
+v2.2 Agent State版本
 """
+
 
 from utils.visualization import (
     plot_product_sales,
@@ -8,47 +11,64 @@ from utils.visualization import (
 )
 
 
-def create_chart_tool(
-        df,
-        product_col,
-        sales_col,
-        chart_path,
-        date_col=None,
-        trend_path=None
-):
+
+def create_chart_tool(state):
+
     """
     销售数据可视化工具
 
-    功能：
-    1. 生成产品销售排行图
-    2. 生成销售趋势图
+    输入:
+        AgentState
 
+    更新:
+        state.charts
     """
 
-    result = {}
+
+    charts = {}
+
+
 
     # 产品销售排行图
-    product_chart = plot_product_sales(
-        df,
-        product_col,
-        sales_col,
-        chart_path
+
+    plot_product_sales(
+        state.df,
+        state.product_col,
+        state.sales_col,
+        state.chart_path
     )
 
-    result["product_chart"] = chart_path
+
+    charts["product_chart"] = (
+        state.chart_path
+    )
 
 
-    # 销售趋势图（如果存在日期字段）
-    if date_col and trend_path:
+
+    # 销售趋势图
+
+    if (
+        state.date_col
+        and state.trend_chart_path
+    ):
+
 
         plot_sales_trend(
-            df,
-            date_col,
-            sales_col,
-            trend_path
+            state.df,
+            state.date_col,
+            state.sales_col,
+            state.trend_chart_path
         )
 
-        result["trend_chart"] = trend_path
+
+        charts["trend_chart"] = (
+            state.trend_chart_path
+        )
 
 
-    return result
+
+    state.charts = charts
+
+
+
+    return state
