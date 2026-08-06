@@ -7,8 +7,7 @@ LLM Planner + Tool Registry
 from state import AgentState
 
 import pandas as pd
-import logging
-
+from utils.logger import get_logger
 
 from config import (
     DATA_PATH,
@@ -43,8 +42,7 @@ class DataAgent:
             llm_client: LLMClient = None
     ):
 
-
-        self.logger = logging.getLogger(
+        self.logger = get_logger(
             __name__
         )
 
@@ -74,6 +72,9 @@ class DataAgent:
             self,
             state
     ):
+        self.logger.info(
+            f"读取数据文件:{state.file_path}"
+        )
 
 
         # 读取数据
@@ -113,6 +114,9 @@ class DataAgent:
         for task in state.plan:
 
             tool_name = task["tool"]
+            self.logger.info(
+                f"开始执行工具: {tool_name}"
+            )
 
             reason = task["reason"]
 
@@ -147,8 +151,15 @@ class DataAgent:
                     state
                 )
 
+                self.logger.info(
+                    f"工具执行完成: {tool_name}"
+                )
+
 
             except Exception as e:
+                self.logger.error(
+                    f"{tool_name}执行失败: {e}"
+                )
 
                 state.error = str(e)
 
@@ -194,6 +205,9 @@ class DataAgent:
         state.analysis_result = (
             self.analysis_result
         )
+        self.logger.info(
+            f"分析完成:{self.analysis_result}"
+        )
 
 
         return self.analysis_result
@@ -223,6 +237,9 @@ class DataAgent:
 
 
         self.user_query = user_query
+        self.logger.info(
+            f"Agent开始执行任务: {user_query}"
+        )
 
 
 
@@ -241,6 +258,10 @@ class DataAgent:
 
         state.plan = self.planner.create_plan(
             user_query
+        )
+
+        self.logger.info(
+            f"Planner生成计划: {state.plan}"
         )
 
 

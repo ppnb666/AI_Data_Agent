@@ -1,0 +1,18 @@
+[33m053ed3c[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m 完成Agent State状态管理升级
+[33med967b4[m 完成LLM Planner V2.1任务依赖补全
+[33m5d9c4f2[m 新增LLM Planner V1，实现智能任务规划与工具调用
+[33m94b4cbd[m 升级Agent工具调用架构与字段智能识别
+[33m2b60a1d[m 完成AI Agent数据分析流程整合
+[33m8c096c4[m 添加销售趋势图
+[33m630708d[m 新增日志系统：使用 logging 替代 print，日志自动保存到 logs/
+[33mb664b1f[m 工程化重构：所有路径统一放入 config.py 管理
+[33m87ffe41[m 完善README文档
+[33mc738993[m V1 完成：数据分析 + 可视化 + Markdown 报告
+[33maaaf5b3[m 新增可视化功能：产品销售额柱状图
+[33mdc1eae8[m 完善项目README文档
+[33m703f5b0[m 增加Excel字段自动识别功能
+[33m13540b0[m 重构: 将文件路径移到 config.py 统一管理
+[33ma610e9b[m 移除 .idea 文件夹（已加入 .gitignore）
+[33m8aa9ba1[m 添加项目README说明
+[33m560a83a[m 添加git忽略文件配置
+[33m5f2dfe0[m 完成Excel数据分析功能
