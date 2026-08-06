@@ -1,66 +1,68 @@
+"""
+数据分析工具
+"""
 
 from utils.analysis import (
     clean_data,
-    check_missing_values,
-    check_duplicates,
     get_top_product,
-    detect_outliers,
-    generate_summary
+    detect_outliers
 )
 
 
-def sales_analysis_tool(df, sales_column, product_column):
+
+def clean_data_tool(df):
+
     """
-    销售分析工具
+    数据清洗工具
     """
 
-    result = {}
+    result,count = clean_data(df)
+
+    return {
+        "data":result,
+        "clean_count":count
+    }
 
 
-    # 数据清洗
-    df_clean, clean_count = clean_data(df)
 
-    result["clean_df"] = df_clean
-    result["clean_count"] = clean_count
+def top_product_tool(
+    df,
+    sales_col,
+    product_col
+):
 
+    """
+    销售冠军分析工具
+    """
 
-    # 缺失值
-    missing = check_missing_values(df_clean)
-
-    result["missing"] = missing.to_dict()
-
-
-    # 重复数据
-    result["duplicates"] = check_duplicates(df_clean)
-
-
-    # 销售冠军
-
-    top_product, top_sales = get_top_product(
-        df_clean,
-        sales_column,
-        product_column
+    product,sales = get_top_product(
+        df,
+        sales_col,
+        product_col
     )
 
+    return {
+        "product":product,
+        "sales":sales
+    }
 
-    result["top_product"] = top_product
-    result["top_sales"] = top_sales
 
 
-    # 异常检测
+def outlier_detection_tool(
+    df,
+    sales_col
+):
 
-    outliers = detect_outliers(
-        df_clean,
-        sales_column
+    """
+    异常检测工具
+    """
+
+    result = detect_outliers(
+        df,
+        sales_col
     )
 
-    result["outliers"] = outliers
-    result["outlier_count"] = len(outliers)
-
-
-    # 数据摘要
-
-    result["summary"] = generate_summary(df_clean)
-
-
-    return result
+    return {
+        "count":len(result),
+        "data":result
+    }

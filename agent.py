@@ -1,5 +1,6 @@
 """
 AI Agent - 智能数据分析决策层
+基于 Tool Registry 的工具调用架构
 """
 
 import pandas as pd
@@ -13,16 +14,15 @@ from config import (
     MD_REPORT_PATH,
     TREND_CHART_PATH
 )
+
+# 只保留报告生成相关的工具
 from utils.analysis import (
-    clean_data,
-    check_missing_values,
-    check_duplicates,
-    get_top_product,
-    detect_outliers,
-    generate_summary,
     generate_report,
     generate_markdown_report
 )
+
+# 工具注册中心
+from tools import tool_registry
 from utils.data_parser import detect_columns
 from utils.visualization import plot_product_sales, plot_sales_trend
 from llm.client import LLMClient, get_client
@@ -30,11 +30,11 @@ from llm.client import LLMClient, get_client
 
 class DataAgent:
     """
-    数据分析 Agent
+    数据分析 Agent - 基于 Tool Registry 架构
 
     职责：
     1. 接收用户需求（文件路径）
-    2. 执行数据分析（调用工具）
+    2. 通过 Tool Registry 调用工具执行数据分析
     3. 生成报告
     4. 调用大模型生成业务洞察
     """
@@ -87,42 +87,151 @@ class DataAgent:
                 self.logger.error("❌ 未能检测到关键列，请检查数据格式")
                 return {"error": "未能检测到关键列"}
 
+            # ============================================================
             # 3. 数据清洗
+            # ============================================================
+
             self.logger.info("🧹 步骤 3/6：数据清洗")
-            df_cleaned, clean_count = clean_data(df)
-            self.logger.info(f"✅ 清洗完成，删除 {clean_count} 条数据")
 
-            # 4. 数据分析
+            clean_tool = tool_registry.get_tool("clean_data")
+
+            if clean_tool is None:
+                return {"error": "工具未注册: clean_data"}
+
+            clean_result = clean_tool["function"](df)
+            print("调用工具：clean_data")
+
+            df_cleaned = clean_result["data"]
+
+            clean_count = clean_result["clean_count"]
+
+            self.logger.info(
+                f"✅ 清洗完成，删除 {clean_count} 条数据"
+            )
+
+            # ============================================================
+            # 4. 数据分析 - 通过 Tool Registry 调用
+            # ============================================================
             self.logger.info("📊 步骤 4/6：数据分析")
-            top_product, top_sales = get_top_product(
-                df_cleaned, sales_col, product_col
+
+            # ============================================================
+            # 4. 数据分析 - 通过 Tool Registry 调用
+            # ============================================================
+            self.logger.info("📊 步骤 4/6：数据分析")
+
+            # 4.1 销售冠军分析
+            top_tool = tool_registry.get_tool("top_product")
+
+            if top_tool is None:
+                self.logger.error("❌ 未找到 top_product 工具")
+                return {"error": "工具未注册: top_product"}
+
+            top_result = top_tool["function"](
+                df_cleaned,
+                sales_col,
+                product_col
             )
-            outliers = detect_outliers(df_cleaned, sales_col)
-            self.logger.info(f"🏆 销售冠军：{top_product}，销售额：{top_sales}")
+
+            top_product = top_result["product"]
+            top_sales = top_result["sales"]
+
+            self.logger.info(
+                f"🏆 销售冠军：{top_product}，销售额：{top_sales}"
+            )
+            print("调用工具：top_product")
+
+            # 4.2 异常检测
+            outlier_tool = tool_registry.get_tool("detect_outliers")
+            if outlier_tool is None:
+                self.logger.error("❌ 未找到 detect_sales_outliers 工具")
+                return {"error": "工具未注册: detect_sales_outliers"}
+
+            outlier_result = outlier_tool["function"](
+                df_cleaned,
+                sales_col
+            )
+
+            outliers = outlier_result["data"]
+
             self.logger.info(f"⚠️ 异常数据：{len(outliers)} 条")
+            print("调用工具：detect_outliers")
 
-            # 5. 生成图表
+            # ============================================================
+            # 5. 生成图表 - Tool Registry调用
+            # ============================================================
+
             self.logger.info("📈 步骤 5/6：生成可视化图表")
-            plot_product_sales(df_cleaned, product_col, sales_col, CHART_PATH)
-            if date_col:
-                plot_sales_trend(df_cleaned, date_col, sales_col, TREND_CHART_PATH)
-            self.logger.info(f"✅ 图表已保存：{CHART_PATH}")
 
-            # 6. 生成报告
+            chart_tool = tool_registry.get_tool(
+                "create_chart"
+            )
+
+            if chart_tool is None:
+                return {
+                    "error": "工具未注册: create_chart"
+                }
+
+            chart_result = chart_tool["function"](
+                df_cleaned,
+                product_col,
+                sales_col,
+                CHART_PATH,
+                date_col,
+                TREND_CHART_PATH
+            )
+
+            self.logger.info(
+                f"✅ 图表生成完成：{chart_result}"
+            )
+
+            # ============================================================
+            # 6. 生成报告 - Tool Registry调用
+            # ============================================================
+
             self.logger.info("📝 步骤 6/6：生成报告")
-            report = generate_report(
-                df_cleaned, clean_count, top_product, top_sales
-            )
-            with open(REPORT_PATH, "w", encoding="utf-8") as f:
-                f.write(report)
 
-            md_report = generate_markdown_report(
-                df_cleaned, clean_count, top_product, top_sales, outliers
-            )
-            with open(MD_REPORT_PATH, "w", encoding="utf-8") as f:
-                f.write(md_report)
+            # 文本报告
 
-            self.logger.info(f"✅ 报告已生成：{REPORT_PATH}")
+            report_tool = tool_registry.get_tool(
+                "generate_report"
+            )
+
+            if report_tool is None:
+                return {
+                    "error": "工具未注册: generate_report"
+                }
+
+            report_result = report_tool["function"](
+                df_cleaned,
+                clean_count,
+                top_product,
+                top_sales,
+                REPORT_PATH
+            )
+
+            # Markdown报告
+
+            md_tool = tool_registry.get_tool(
+                "generate_markdown_report"
+            )
+
+            if md_tool is None:
+                return {
+                    "error": "工具未注册: generate_markdown_report"
+                }
+
+            md_result = md_tool["function"](
+                df_cleaned,
+                clean_count,
+                top_product,
+                top_sales,
+                outliers,
+                MD_REPORT_PATH
+            )
+
+            self.logger.info(
+                f"✅ 报告生成完成：{report_result}"
+            )
 
             # 7. 收集分析结果
             self.analysis_result = {
@@ -247,7 +356,7 @@ def main():
     # 初始化 Agent
     agent = DataAgent()
 
-    # 执行分析（暂不启用 AI）
+    # 执行分析
     result = agent.run(DATA_PATH, with_ai=True)
 
     # 打印结果

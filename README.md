@@ -16,7 +16,11 @@
 * 异常数据查找
 * 报告制作
 
-本项目通过 Python 数据分析技术，实现 Excel 文件的自动化处理。
+AI_Data_Agent 是一个基于 Python 和大语言模型的数据分析 Agent。
+
+系统能够自动读取 Excel 数据，
+完成数据清洗、字段识别、统计分析、
+异常检测、可视化生成，并结合大模型生成业务洞察。
 
 当前项目支持：
 
@@ -184,25 +188,35 @@ Markdown报告包含：
 
 ```text
 AI_Data_Agent
-
 │
 ├── data
 │   └── sales.xlsx                 # Excel测试数据
 │
 ├── reports
-│   ├── report.txt                 # 文本报告
+│   ├── report.txt                 # 文本分析报告
 │   ├── analysis_report.md         # Markdown分析报告
-│   └── product_sales.png          # 可视化图片
+│   ├── product_sales.png          # 产品销售额柱状图
+│   └── sales_trend.png            # 销售趋势图
+│
+├── logs
+│   └── app.log                    # 程序运行日志
+│
+├── llm
+│   ├── __init__.py
+│   └── client.py                  # 大模型API调用模块
 │
 ├── utils
 │   ├── __init__.py
-│   ├── analysis.py                # 数据分析模块
-│   ├── data_parser.py             # 自动字段识别模块
-│   └── visualization.py           # 可视化模块
+│   ├── analysis.py                # 数据清洗、统计分析、报告生成
+│   ├── data_parser.py             # Excel字段自动识别
+│   ├── visualization.py           # 数据可视化模块
+│   └── logger.py                  # 日志配置模块
 │
-├── config.py                      # 项目配置
+├── agent.py                       # AI Agent核心决策模块
+├── config.py                      # 项目路径和参数配置
 ├── main.py                        # 程序入口
 │
+├── .env                           # 大模型API配置
 ├── requirements.txt               # 项目依赖
 ├── README.md
 └── .gitignore
@@ -295,6 +309,8 @@ Excel文件
 * openpyxl
 * matplotlib
 * Git
+* LLM
+* Agent Workflow
 
 ---
 
