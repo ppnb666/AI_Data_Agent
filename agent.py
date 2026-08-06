@@ -117,6 +117,11 @@ class DataAgent:
             self.logger.info(
                 f"开始执行工具: {tool_name}"
             )
+            state.trace.add_step(
+                tool_name,
+                "running",
+                "开始执行工具"
+            )
 
             reason = task["reason"]
 
@@ -151,6 +156,12 @@ class DataAgent:
                     state
                 )
 
+                state.trace.add_step(
+                    tool_name,
+                    "success",
+                    "工具执行完成"
+                )
+
                 self.logger.info(
                     f"工具执行完成: {tool_name}"
                 )
@@ -159,6 +170,12 @@ class DataAgent:
             except Exception as e:
                 self.logger.error(
                     f"{tool_name}执行失败: {e}"
+                )
+
+                state.trace.add_step(
+                    tool_name,
+                    "failed",
+                    str(e)
                 )
 
                 state.error = str(e)
@@ -208,6 +225,8 @@ class DataAgent:
         self.logger.info(
             f"分析完成:{self.analysis_result}"
         )
+
+        state.trace.save()
 
 
         return self.analysis_result

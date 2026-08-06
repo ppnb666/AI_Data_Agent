@@ -12,7 +12,7 @@ from config import (
     MD_REPORT_PATH
 )
 
-
+from utils.trace import AgentTrace
 
 class AgentState:
 
@@ -107,6 +107,10 @@ class AgentState:
         # 错误
 
         self.error = None
+
+        # Agent执行轨迹
+
+        self.trace = AgentTrace()
 
 
 
