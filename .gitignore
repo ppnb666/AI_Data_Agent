@@ -6,3 +6,4 @@ __pycache__/
 # 日志文件
 logs/
 *.log
+.env

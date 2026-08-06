@@ -1,11 +1,15 @@
+
 import matplotlib.pyplot as plt
+import matplotlib
 import pandas as pd
 
 # ===== 解决中文显示问题 =====
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
 plt.rcParams['axes.unicode_minus'] = False
 # ===========================
-
+# 使用标准字体，避免警告
+matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 def plot_product_sales(df, product_column, sales_column, save_path):
     """
