@@ -3,7 +3,6 @@ AI Data Agent
 
 LLM Planner + Tool Registry
 """
-
 from state import AgentState
 
 import pandas as pd
@@ -22,6 +21,7 @@ from tools import tool_registry
 
 
 from utils.data_parser import detect_columns
+from utils.data_profiler import profile_dataframe
 
 
 from llm.client import (
@@ -77,6 +77,7 @@ class DataAgent:
         )
 
 
+
         # 读取数据
 
         df = pd.read_excel(
@@ -86,7 +87,13 @@ class DataAgent:
 
         state.df = df
 
+        state.data_profile = profile_dataframe(
+            df
+        )
 
+        self.logger.info(
+            f"数据画像:{state.data_profile}"
+        )
 
         # 自动识别字段
 
@@ -150,11 +157,14 @@ class DataAgent:
 
             try:
 
-                # ⭐统一传递state
+                # ⭐保存工具返回结果
 
-                func(
+                tool_result = func(
                     state
                 )
+
+                if tool_name == "query_value":
+                    state.query_result = tool_result
 
                 state.trace.add_step(
                     tool_name,
@@ -191,29 +201,28 @@ class DataAgent:
 
         self.analysis_result = {
 
-
             "total_count":
                 len(state.df),
-
 
             "clean_count":
                 state.clean_count,
 
-
             "top_product":
                 state.top_product,
-
 
             "top_sales":
                 state.top_sales,
 
-
             "outlier_count":
                 len(state.outliers),
 
-
             "columns":
-                list(state.df.columns)
+                list(state.df.columns),
+
+
+
+            "query_result":
+                state.query_result,
 
         }
 

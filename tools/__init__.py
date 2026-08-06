@@ -1,5 +1,5 @@
 from .registry import tool_registry
-
+from .query_tools import query_value_tool
 
 from .data_tools import (
     clean_data_tool,
@@ -56,4 +56,10 @@ tool_registry.register(
     "generate_markdown_report",
     "生成Markdown分析报告",
     generate_markdown_report_tool
+)
+
+tool_registry.register(
+    "query_value",
+    "根据用户条件查询Excel数据",
+    query_value_tool
 )

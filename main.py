@@ -5,7 +5,7 @@ from config import DATA_PATH
 agent = DataAgent()
 
 
-query=input(
+query = input(
     "请输入你的分析需求："
 )
 
@@ -22,7 +22,71 @@ print("\n======================")
 
 print("📊 数据分析结果:")
 
-print(result)
+
+
+query_result = result.get(
+    "query_result"
+)
+
+
+
+if query_result:
+
+
+    print("\n==========合同查询结果==========")
+
+
+
+    print(
+f"""
+客户:
+{query_result.get('customer')}
+
+
+匹配合同数量:
+{query_result.get('count')} 条
+
+"""
+    )
+
+
+
+    summary = query_result.get(
+        "summary",
+        {}
+    )
+
+
+
+    print(
+f"""
+金额汇总:
+
+期初余额总额:
+{summary.get('期初余额总额'):,.2f}
+
+
+本期贷方总额:
+{summary.get('本期贷方总额'):,.2f}
+
+
+贷方累计总额:
+{summary.get('贷方累计总额'):,.2f}
+
+
+期末余额总额:
+{summary.get('期末余额总额'):,.2f}
+
+"""
+    )
+
+
+
+else:
+
+    print(
+        "没有查询结果"
+    )
 
 
 

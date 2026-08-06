@@ -17,10 +17,19 @@ from tools import tool_registry
 
 
 class TaskPlanner:
+
     def optimize_plan(self, plan):
         """
         根据工具依赖关系优化任务执行顺序
         """
+        # 查询任务不需要分析依赖
+
+        if any(
+            task["tool"]=="query_value"
+            for task in plan
+        ):
+
+            return plan
 
         tool_names = [
             task["tool"]
@@ -169,67 +178,145 @@ class TaskPlanner:
 
             return self.optimize_plan(default_plan)
 
+        prompt = f"""
+
+        你是企业数据查询助手。
+
+        你的任务：
+        根据用户需求选择工具，并提取查询参数。
 
 
-        prompt=f"""
+        ========================
+        客户查询任务规则
+        ========================
 
-你是一个专业的数据分析Agent Planner。
+        如果用户需求包含：
 
+        查询
+        查找
+        获取
+        搜索
+        指定客户
+        指定合同
+        合同金额
+        余额
 
-你的任务：
-
-根据用户需求，选择需要执行的数据分析工具。
-
-
-当前可用工具：
-
-{tools}
-
-
-
-用户需求：
-
-{user_query}
+        说明用户需要查询已有数据。
 
 
+        必须选择：
 
-请返回JSON数组。
-
-
-格式必须严格如下：
-
-[
-    {{
-        "tool":"工具名称",
-        "reason":"选择该工具的原因"
-    }}
-]
+        query_value
 
 
-
-例如：
-
-[
-    {{
-        "tool":"detect_outliers",
-        "reason":"用户要求分析销售异常"
-    }},
-
-    {{
-        "tool":"generate_report",
-        "reason":"用户要求生成报告"
-    }}
-]
+        并且必须提取完整客户名称。
 
 
+        例如：
 
-注意：
+        用户：
 
-1. tool字段必须来自可用工具列表
-2. 不要输出解释
-3. 只返回JSON
-"""
+        查询【客商：广东省高速公路有限公司台山分公司】合同金额
 
+
+        必须返回：
+
+        [
+            {{
+                "tool":"query_value",
+                "reason":"查询指定客户合同金额",
+                "customer":"广东省高速公路有限公司台山分公司",
+                "metrics":[
+                    "本期贷方",
+                    "贷方累计",
+                    "期末余额"
+                ]
+            }}
+        ]
+
+
+        ========================
+        客户名称提取规则
+        ========================
+
+
+        必须保留完整名称。
+
+
+        例如：
+
+        用户：
+
+        查【客商：广东省高速公路有限公司广清分公司】
+
+
+        返回：
+
+        广东省高速公路有限公司广清分公司
+
+
+        禁止返回：
+
+        广东省高速公路有限公司
+
+
+        必须保留：
+
+        有限公司
+
+        集团
+
+        本部
+
+        分公司
+
+        股份有限公司
+
+
+        ========================
+
+
+        当前可用工具：
+
+        {tools}
+
+
+
+        ========================
+
+        用户需求：
+
+        {user_query}
+
+
+
+        ========================
+
+
+        请严格返回JSON数组。
+
+
+        格式：
+
+
+        [
+            {{
+                "tool":"工具名称",
+                "reason":"选择原因",
+                "customer":"客户名称",
+                "metrics":[
+                    "需要查询指标"
+                ]
+            }}
+        ]
+
+
+        注意：
+
+        1. tool必须来自工具列表
+        2. 不要输出解释
+        3. 只输出JSON
+        """
 
 
         messages=[
@@ -318,13 +405,23 @@ class TaskPlanner:
 
                 if tool_name in tools:
 
-
                     valid_plan.append(
                         {
-                            "tool":tool_name,
-                            "reason":task.get(
+                            "tool": tool_name,
+
+                            "reason": task.get(
                                 "reason",
                                 ""
+                            ),
+
+                            "customer": task.get(
+                                "customer",
+                                ""
+                            ),
+
+                            "metrics": task.get(
+                                "metrics",
+                                []
                             )
                         }
                     )

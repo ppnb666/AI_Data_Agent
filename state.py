@@ -23,6 +23,7 @@ class AgentState:
         # 用户请求
 
         self.user_query = ""
+        self.query_result = {}
 
 
         # Excel路径
@@ -47,6 +48,8 @@ class AgentState:
 
         self.df = None
 
+        self.data_profile = {}
+
 
 
         # 字段信息
@@ -68,6 +71,8 @@ class AgentState:
         self.top_sales = 0
 
         self.outliers = []
+
+        self.query_result = None
 
 
 
@@ -101,6 +106,10 @@ class AgentState:
         # 最终分析结果
 
         self.analysis_result = {}
+
+        # 查询结果
+
+        self.query_result = {}
 
 
 
@@ -137,6 +146,9 @@ class AgentState:
 
 
             "charts":
-                self.charts
+                self.charts,
+
+            "query_result":
+                self.query_result
 
         }
