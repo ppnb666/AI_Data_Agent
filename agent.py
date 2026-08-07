@@ -31,7 +31,7 @@ from llm.client import (
 
 
 from planner import TaskPlanner
-
+from profiler.data_profiler_agent import DataProfilerAgent
 
 
 class DataAgent:
@@ -60,6 +60,9 @@ class DataAgent:
         self.planner = TaskPlanner(
             self.llm
         )
+        self.data_profiler = DataProfilerAgent(
+            self.llm
+        )
 
 
         self.analysis_result = {}
@@ -86,6 +89,25 @@ class DataAgent:
 
 
         state.df = df
+        # AI理解数据结构
+
+        schema = self.data_profiler.analyze(
+            df
+        )
+
+        state.schema = schema
+
+        self.logger.info(
+            f"AI数据理解结果:{schema}"
+        )
+
+        print(
+            "\n📚 AI数据理解:"
+        )
+
+        print(
+            schema
+        )
 
         state.data_profile = profile_dataframe(
             df
@@ -240,12 +262,107 @@ class DataAgent:
 
         return self.analysis_result
 
-
-
-
-
     def get_ai_insight(self):
 
+        query_result = (
+            self.analysis_result
+            .get(
+                "query_result",
+                {}
+            )
+        )
+
+        # ==========================
+        # 合同查询场景
+        # ==========================
+
+        if query_result:
+            prompt = f"""
+
+    你是一名企业财务数据分析专家。
+
+
+    请根据以下客户合同查询结果，
+    生成业务分析建议。
+
+
+    查询数据:
+
+    {query_result}
+
+
+
+    请按照以下结构输出：
+
+
+    一、客户查询概况
+
+    说明：
+
+    - 客户名称
+    - 匹配合同数量
+    - 金额规模
+
+
+    二、合同金额分析
+
+    重点分析：
+
+    - 期初余额
+    - 本期贷方
+    - 贷方累计
+    - 期末余额
+
+
+    判断：
+
+    - 当前合同金额规模
+    - 客户资金情况
+    - 是否存在较大余额
+
+
+    三、业务建议
+
+    结合数据提出：
+
+    - 合同跟踪建议
+    - 回款管理建议
+    - 风险关注点
+
+
+    注意：
+
+    不要分析：
+    - 产品销量
+    - 销售冠军
+    - 销售排名
+
+    因为当前数据属于合同财务数据。
+
+
+
+    请输出中文分析。
+    """
+
+            return self.llm.chat(
+                [
+                    {
+                        "role": "system",
+                        "content":
+                            "你是一名企业财务分析助手"
+                    },
+
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+
+                ]
+            )
+
+        # ==========================
+        # 原销售分析场景
+        # ==========================
 
         return self.llm.summarize_analysis(
             self.analysis_result

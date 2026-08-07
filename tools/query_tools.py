@@ -190,9 +190,11 @@ def query_value_tool(state):
 
         "期末余额总额":
 
-            round(
-                result["期末余额"].sum(),
-                2
+            float(
+                round(
+                    result["期末余额"].sum(),
+                    2
+                )
             )
 
 
