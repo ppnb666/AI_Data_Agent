@@ -8,9 +8,7 @@ from state import AgentState
 
 from utils.logger import get_logger
 
-from config import (
-    DATA_PATH
-)
+from config import DATA_PATH
 
 from tools import tool_registry
 
@@ -26,69 +24,53 @@ from planner import TaskPlanner
 
 from profiler.data_profiler_agent import DataProfilerAgent
 
-# ⭐新增
 from schema.schema_agent import SchemaAgent
 
 
-
 class DataAgent:
+
 
     def __init__(
             self,
             llm_client: LLMClient = None
     ):
 
+
         self.logger = get_logger(
             __name__
         )
 
-        # ======================
-        # LLM
-        # ======================
 
         self.llm = (
-                llm_client
-                or get_client()
+            llm_client
+            or get_client()
         )
 
-        # ======================
-        # Planner
-        # ======================
 
         self.planner = TaskPlanner(
             self.llm
         )
 
-        # ======================
-        # Schema Agent
-        # 负责理解整个Excel结构
-        # ======================
 
         self.schema_agent = SchemaAgent(
             self.llm
         )
 
-        # ======================
-        # Data Profiler Agent
-        # 负责理解当前Sheet
-        # ======================
 
         self.data_profiler = DataProfilerAgent(
             self.llm
         )
 
-        # ======================
-        # 保存结果
-        # ======================
 
         self.analysis_result = {}
 
-        self.user_query = ""
 
 
+    # ==========================
+    # 数据准备阶段
+    # ==========================
 
-
-    def analyze(
+    def prepare_context(
             self,
             state
     ):
@@ -99,122 +81,76 @@ class DataAgent:
         )
 
 
-
-        # ======================
-        # 1. 加载所有Sheet
-        # ======================
-
         from utils.excel_loader import load_excel
 
 
-        sheet_profiles = load_excel(
+        sheets = load_excel(
             state.file_path
         )
 
 
-        state.sheet_profiles = sheet_profiles
+        state.sheet_profiles = sheets
 
 
 
         print(
             "\n📂 Excel Sheet数量:",
-            len(sheet_profiles)
+            len(sheets)
         )
 
 
+        # Schema理解
 
-
-        # ==========================
-        # Schema Agent理解整个Excel
-        # ==========================
-
-        workbook_schema = self.schema_agent.analyze(
-            sheet_profiles
+        schema = self.schema_agent.analyze(
+            sheets
         )
 
-        state.workbook_schema = workbook_schema
+
+        state.workbook_schema = schema
+
 
         print(
             "\n📚 Excel结构理解:"
         )
 
-        print(
-            workbook_schema
-        )
-
-
-        state.workbook_schema = workbook_schema
+        print(schema)
 
 
 
-        print(
-            "\n🗂️ Excel数据地图:"
-        )
-
-
-        print(
-            workbook_schema
-        )
-
-
-
-
-        # ======================
-        # 3. AI选择Sheet
-        # ======================
-
+        # 选择Sheet
 
         selected = self.data_profiler.select_sheet(
-            sheet_profiles,
+            sheets,
             state.user_query
         )
 
 
-
         if not selected:
 
-
-            self.logger.warning(
-                "AI选择Sheet失败，使用第一个Sheet"
-            )
-
-
-            selected = sheet_profiles[0]
+            selected = sheets[0]
 
 
 
+        state.df = selected["df"]
 
-        df = selected["df"]
-
-
-        sheet_name = selected["sheet"]
-
-
-
-        state.df = df
-
-        state.sheet_name = sheet_name
+        state.sheet_name = selected["sheet"]
 
 
 
         self.logger.info(
-            f"当前使用Sheet:{sheet_name}"
+            f"当前Sheet:{state.sheet_name}"
         )
 
 
 
+        # 数据理解
 
-        # ======================
-        # 4. 单Sheet数据理解
-        # ======================
-
-
-        schema = self.data_profiler.analyze(
-            df
+        data_schema = self.data_profiler.analyze(
+            state.df
         )
 
 
-        state.schema = schema
+        state.schema = data_schema
 
 
 
@@ -222,27 +158,18 @@ class DataAgent:
             "\n📚 AI数据理解:"
         )
 
-
-        print(
-            schema
-        )
+        print(data_schema)
 
 
 
         state.data_profile = profile_dataframe(
-            df
+            state.df
         )
 
 
 
-
-        # ======================
-        # 5. 自动识别字段
-        # ======================
-
-
         columns = detect_columns(
-            df
+            state.df
         )
 
 
@@ -250,11 +177,9 @@ class DataAgent:
             "sales_column"
         )
 
-
         state.product_col = columns.get(
             "product_column"
         )
-
 
         state.date_col = columns.get(
             "date_column"
@@ -262,45 +187,36 @@ class DataAgent:
 
 
 
+    # ==========================
+    # 工具执行阶段
+    # ==========================
 
-        # ======================
-        # 6. 执行Planner计划
-        # ======================
+    def execute_plan(
+            self,
+            state
+    ):
+
+
+        results = []
+
 
 
         print(
-            "\n执行计划:"
+            "\n==========执行计划=========="
         )
-
 
 
         for task in state.plan:
 
 
-
-            tool_name = task["tool"]
-
-
-
-            print(
-                f"\n执行工具:{tool_name}"
+            tool_name = task.get(
+                "tool"
             )
 
 
             print(
-                f"原因:{task.get('reason','')}"
-            )
-
-
-
-            state.current_tool = tool_name
-
-
-
-            state.trace.add_step(
-                tool_name,
-                "running",
-                "开始执行工具"
+                "执行工具:",
+                tool_name
             )
 
 
@@ -310,36 +226,40 @@ class DataAgent:
             )
 
 
-
             if not tool:
 
 
                 print(
-                    f"⚠️ 工具不存在:{tool_name}"
+                    "工具不存在:",
+                    tool_name
                 )
 
-
                 continue
-
-
-
-
-            func = tool["function"]
-
 
 
 
             try:
 
 
-                result = func(
+                result = tool["function"](
                     state
                 )
 
 
 
-                if tool_name == "query_value":
+                results.append(
+                    result
+                )
 
+
+
+                if tool_name in [
+
+                    "query_value",
+
+                    "compare_rows"
+
+                ]:
 
                     state.query_result = result
 
@@ -348,7 +268,7 @@ class DataAgent:
                 state.trace.add_step(
                     tool_name,
                     "success",
-                    "工具执行完成"
+                    "工具执行成功"
                 )
 
 
@@ -357,12 +277,8 @@ class DataAgent:
 
 
                 self.logger.error(
-                    f"{tool_name}执行失败:{e}"
+                    f"{tool_name}失败:{e}"
                 )
-
-
-                state.error = str(e)
-
 
 
                 state.trace.add_step(
@@ -373,72 +289,39 @@ class DataAgent:
 
 
 
-                break
+                state.error = str(e)
 
 
 
+        return results
 
 
-        # ======================
-        # 7. 汇总结果
-        # ======================
+
+    # ==========================
+    # 结果整理
+    # ==========================
+
+    def build_result(
+            self,
+            state
+    ):
 
 
         self.analysis_result = {
 
 
-
             "total_count":
+
                 len(state.df),
 
 
+            "sheet":
 
-            "clean_count":
-                getattr(
-                    state,
-                    "clean_count",
-                    0
-                ),
-
-
-
-            "top_product":
-                getattr(
-                    state,
-                    "top_product",
-                    None
-                ),
-
-
-
-            "top_sales":
-                getattr(
-                    state,
-                    "top_sales",
-                    None
-                ),
-
-
-
-            "outlier_count":
-                len(
-                    getattr(
-                        state,
-                        "outliers",
-                        []
-                    )
-                ),
-
-
-
-            "columns":
-                list(
-                    state.df.columns
-                ),
-
+                state.sheet_name,
 
 
             "query_result":
+
                 getattr(
                     state,
                     "query_result",
@@ -454,120 +337,118 @@ class DataAgent:
         )
 
 
-
         state.trace.save()
-
 
 
         return self.analysis_result
 
 
 
-
-
-
+    # ==========================
+    # AI分析
+    # ==========================
 
     def get_ai_insight(
             self
     ):
 
 
+        result = self.analysis_result.get(
+            "query_result",
+            {}
+        )
 
-        query_result = (
 
-            self.analysis_result
+        if not result:
+
+            return "没有查询结果"
+
+
+
+        rows = (
+
+            result
             .get(
-                "query_result",
+                "data",
                 {}
+            )
+            .get(
+                "rows",
+                []
             )
 
         )
 
 
 
-        # ======================
-        # 合同分析
-        # ======================
+        if not rows:
 
 
-        if query_result:
+            return "未发现异常数据"
 
 
 
-            prompt=f"""
+        prompt=f"""
 
 你是一名企业财务分析专家。
 
 
-根据以下查询结果生成分析。
+以下是不符合条件的数据:
+
+{rows}
 
 
-数据:
+请输出:
 
-{query_result}
+1. 数据异常分析
 
+2. 潜在风险
 
-输出:
-
-一、客户概况
-
-二、金额分析
-
-三、风险分析
-
-四、业务建议
+3. 处理建议
 
 
-不要分析销售。
+要求:
+
+只能根据数据分析。
+
+不要编造。
 
 
 """
 
 
+        return self.llm.chat(
 
-            return self.llm.chat(
+            [
 
-                [
+                {
+                    "role":
+                    "system",
 
-                    {
-                        "role":
-                        "system",
+                    "content":
+                    "企业财务分析助手"
 
-                        "content":
-                        "企业财务分析助手"
-
-                    },
-
-
-                    {
-
-                        "role":
-                        "user",
-
-                        "content":
-                        prompt
-
-                    }
-
-                ]
-
-            )
+                },
 
 
+                {
+                    "role":
+                    "user",
 
-        # ======================
-        # 销售分析
-        # ======================
+                    "content":
+                    prompt
 
+                }
 
-        return self.llm.summarize_analysis(
-            self.analysis_result
+            ]
+
         )
 
 
 
-
-
+    # ==========================
+    # Agent入口
+    # ==========================
 
     def run(
             self,
@@ -575,11 +456,6 @@ class DataAgent:
             user_query="",
             with_ai=True
     ):
-
-
-
-        self.user_query = user_query
-
 
 
         state = AgentState()
@@ -593,8 +469,7 @@ class DataAgent:
 
 
 
-
-        # Planner
+        # 1 Planner
 
         state.plan = self.planner.create_plan(
             user_query
@@ -613,16 +488,29 @@ class DataAgent:
 
 
 
+        # 2 数据准备
 
-        # 执行
-
-        result = self.analyze(
+        self.prepare_context(
             state
         )
 
 
 
-        # AI总结
+        # 3 执行工具
+
+        self.execute_plan(
+            state
+        )
+
+
+
+        # 4 输出结果
+
+        result = self.build_result(
+            state
+        )
+
+
 
         if with_ai:
 
@@ -637,10 +525,7 @@ class DataAgent:
 
 
 
-
-
 def main():
-
 
 
     agent = DataAgent()
@@ -651,7 +536,7 @@ def main():
 
         DATA_PATH,
 
-        "帮我分析销售异常，并生成报告"
+        "查保利长大工程有限公司的公路建设期产品运维(JSYW)的本期贷方和贷方累计是否相等"
 
     )
 
@@ -668,9 +553,6 @@ def main():
 
 
 
-
-
 if __name__ == "__main__":
-
 
     main()

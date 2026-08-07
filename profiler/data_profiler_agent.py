@@ -121,58 +121,49 @@ department:
 
         return schema
 
-
-
     def select_sheet(
             self,
             sheet_profiles,
             query
     ):
 
-        prompt = f"""
+        # 根据用户问题判断关键词
+        keywords = []
 
-    你是Excel数据分析专家。
+        if "业务类型" in query or "业务类型（新）" in query:
+            keywords.append("业务类型")
 
+        if "本期贷方" in query:
+            keywords.append("本期贷方")
 
-    用户需求:
+        if "贷方累计" in query:
+            keywords.append("贷方累计")
 
-    {query}
+        if "客商" in query or "客户" in query:
+            keywords.append("客商名称")
 
-
-    下面是Excel所有Sheet信息:
-
-    {sheet_profiles}
-
-
-
-    请选择最适合分析的Sheet。
-
-
-    只返回Sheet名称。
-
-
-    """
-
-        result = self.llm.chat(
-            [
-                {
-                    "role": "system",
-                    "content": "你负责Excel结构理解"
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-
-        sheet_name = result.strip()
+        best_sheet = None
+        max_score = -1
 
         for sheet in sheet_profiles:
 
-            if sheet["sheet"] in sheet_name:
-                return sheet
+            score = 0
 
-        # 防止AI乱返回
+            columns = sheet["df"].columns.tolist()
 
-        return sheet_profiles[0]
+            for key in keywords:
+
+                for col in columns:
+
+                    if key in str(col):
+                        score += 1
+
+            print(
+                f"Sheet匹配评分:{sheet['sheet']} -> {score}"
+            )
+
+            if score > max_score:
+                max_score = score
+                best_sheet = sheet
+
+        return best_sheet

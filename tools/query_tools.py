@@ -3,14 +3,6 @@ import pandas as pd
 
 def clean_schema_field(field):
 
-    """
-    去掉Schema里的Sheet前缀
-
-    Sheet1.客商名称
-    ->
-    客商名称
-    """
-
     if "." in field:
         return field.split(".")[-1]
 
@@ -21,47 +13,20 @@ def clean_schema_field(field):
 def query_value_tool(state):
 
     """
-    Schema驱动智能查询
+    Schema驱动多Sheet查询
 
-    不依赖固定Sheet
-    不依赖固定字段
-
+    支持:
+    1. 客户资料查询
+    2. 多Sheet合并
+    3. 业务过滤
     """
 
-    schema = getattr(
-        state,
-        "workbook_schema",
-        {}
-    )
+    schema = state.workbook_schema
 
+    sheets = state.sheet_profiles
 
-    sheets = getattr(
-        state,
-        "sheet_profiles",
-        []
-    )
-
-
-    if not schema:
-
-        return {
-            "error":
-            "没有Schema信息"
-        }
-
-
-
-    print("\n===== Schema驱动查询 =====")
-    print(schema)
-
-
-
-    # ======================
-    # Planner参数
-    # ======================
 
     customer = ""
-
     filters = {}
 
 
@@ -86,348 +51,194 @@ def query_value_tool(state):
     if not customer:
 
         return {
-            "error":
-            "Planner没有客户"
+            "error":"没有客户"
         }
 
 
 
-    print(
-        "查询客户:",
-        customer
-    )
-
-    print(
-        "过滤条件:",
-        filters
-    )
+    print("\n查询客户:",customer)
 
 
-
-    # ======================
-    # Schema字段
-    # ======================
-
-    customer_fields = [
+    customer_fields=[
 
         clean_schema_field(x)
 
         for x in schema
-        .get("entities", {})
-        .get("customer", [])
-
-    ]
-
-
-    business_fields = [
-
-        clean_schema_field(x)
-
-        for x in schema
-        .get("entities", {})
-        .get("business", [])
-
-    ]
-
-
-    money_fields = [
-
-        clean_schema_field(x)
-
-        for x in schema
-        .get("metrics", {})
-        .get("money", [])
+        .get("entities",{})
+        .get("customer",[])
 
     ]
 
 
 
-    print("客户字段:", customer_fields)
+    business_fields=[
 
-    print("业务字段:", business_fields)
+        clean_schema_field(x)
 
-    print("金额字段:", money_fields)
+        for x in schema
+        .get("entities",{})
+        .get("business",[])
 
-
-
-    # ======================
-    # 自动找Sheet
-    # ======================
-
-    business_df = None
-
-    money_df = None
+    ]
 
 
-    business_customer_field = None
 
-    money_customer_field = None
+    money_fields=[
+
+        clean_schema_field(x)
+
+        for x in schema
+        .get("metrics",{})
+        .get("money",[])
+
+    ]
 
 
+
+    all_results=[]
+
+
+    business_count=0
+
+
+
+    # =========================
+    # 遍历所有Sheet
+    # =========================
 
     for sheet in sheets:
 
 
-        df = sheet["df"]
+        df=sheet["df"].copy()
 
-        cols = list(df.columns)
+        sheet_name=sheet["sheet"]
 
 
+        cols=list(df.columns)
 
-        current_customer = None
+
+        customer_col=None
 
 
         for c in customer_fields:
 
             if c in cols:
 
-                current_customer = c
+                customer_col=c
 
                 break
 
 
 
-        if not current_customer:
+        if not customer_col:
 
             continue
 
 
 
-        # 业务Sheet
+        # 客户过滤
 
-        if any(
-            b in cols
-            for b in business_fields
-        ):
+        temp=df[
 
-            business_df = df
-
-            business_customer_field = current_customer
-
-
-
-        # 金额Sheet
-
-        if any(
-            m in cols
-            for m in money_fields
-        ):
-
-            money_df = df
-
-            money_customer_field = current_customer
-
-
-
-
-    if money_df is None:
-
-        return {
-            "error":
-            "没有找到金额Sheet"
-        }
-
-
-
-    print(
-        "业务Sheet:",
-        business_df is not None
-    )
-
-    print(
-        "金额Sheet:",
-        money_df is not None
-    )
-
-
-
-    # ======================
-    # 业务过滤
-    # ======================
-
-    target_customers=[]
-
-
-    temp=None
-
-
-    if business_df is not None:
-
-
-        temp = business_df.copy()
-
-
-
-        temp = temp[
-
-            temp[business_customer_field]
+            df[customer_col]
             .astype(str)
             .str.contains(
                 customer,
-                na=False
+                na=False,
+                regex=False
             )
 
         ]
 
 
 
-        for key,value in filters.items():
+        if len(temp)==0:
 
-
-            target_business_field=None
-
-
-
-            # Schema选择字段
-
-            for field in business_fields:
-
-
-                if field in temp.columns:
-
-                    if (
-                        key.replace(
-                            "（新）",
-                            ""
-                        )
-                        in field
-                        or
-                        "（新）" in field
-                    ):
-
-                        target_business_field = field
-
-                        break
-
-
-
-            if target_business_field is None:
-
-
-                for field in business_fields:
-
-                    if field in temp.columns:
-
-                        target_business_field = field
-
-                        break
-
-
-
-            print(
-                "最终业务字段:",
-                target_business_field
-            )
-
-
-            if target_business_field:
-
-
-                temp=temp[
-
-                    temp[target_business_field]
-                    .astype(str)
-                    .str.contains(
-                        value,
-                        na=False,
-                        regex=False
-                    )
-
-                ]
+            continue
 
 
 
         print(
-            "业务匹配数量:",
+            sheet_name,
+            "匹配:",
             len(temp)
         )
+
+
+
+        # ======================
+        # 业务过滤
+        # ======================
+
+        for key,value in filters.items():
+
+
+            for field in business_fields:
+
+                if field in temp.columns:
+
+                    temp=temp[
+
+                        temp[field]
+                        .astype(str)
+                        .str.contains(
+                            value,
+                            na=False,
+                            regex=False
+                        )
+
+                    ]
+
+                    break
 
 
 
         if len(temp)>0:
 
 
-            target_customers=(
+            temp.insert(
+                0,
+                "来源Sheet",
+                sheet_name
+            )
 
-                temp[business_customer_field]
-                .dropna()
-                .unique()
-                .tolist()
+
+            all_results.extend(
+
+                temp.to_dict(
+                    orient="records"
+                )
 
             )
 
 
 
-    # ======================
-    # 金额查询
-    # ======================
-
-
-    result = money_df.copy()
+            business_count+=len(temp)
 
 
 
-    if target_customers:
-
-
-        result=result[
-
-            result[money_customer_field]
-            .isin(
-                target_customers
-            )
-
-        ]
-
-
-    else:
-
-
-        result=result[
-
-            result[money_customer_field]
-            .astype(str)
-            .str.contains(
-                customer,
-                na=False
-            )
-
-        ]
-
-
-
-    print(
-        "最终金额记录:",
-        len(result)
-    )
-
-
-
-    if len(result)==0:
+    if len(all_results)==0:
 
 
         return {
 
-            "customer":
-            customer,
+            "customer":customer,
 
-            "count":
-            0,
+            "count":0,
 
-            "message":
-            "没有匹配数据"
+            "message":"没有匹配数据"
 
         }
 
 
 
+    result=pd.DataFrame(
+        all_results
+    )
 
-    # ======================
-    # 汇总
-    # ======================
+
 
     summary={}
-
 
 
     for col in money_fields:
@@ -447,8 +258,10 @@ def query_value_tool(state):
 
 
             summary[
+
                 col+"总额"
-            ] = round(
+
+            ]=round(
 
                 result[col].sum(),
 
@@ -458,33 +271,44 @@ def query_value_tool(state):
 
 
 
+    print(
+        "最终返回:",
+        len(result)
+    )
+
+
+
     return {
 
 
         "customer":
+
         customer,
 
 
         "filters":
+
         filters,
 
 
         "count":
+
         len(result),
 
 
         "business_count":
-        len(temp)
-        if temp is not None
-        else 0,
+
+        business_count,
 
 
         "summary":
+
         summary,
 
 
         "data":
-        result.head(50)
+
+        result.head(100)
         .to_dict(
             orient="records"
         )
