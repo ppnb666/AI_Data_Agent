@@ -1,16 +1,19 @@
 """
-LLM Agent任务规划器 V2
+LLM Agent任务规划器 V5
 
-功能:
-1. 调用DeepSeek生成任务计划
-2. 返回结构化任务
-3. 自动读取Tool Registry
+支持:
+
+1. 合同查询
+2. 财务余额查询
+3. 多条件过滤查询
+4. 销售分析
+5. 自动选择工具
+
 """
 
 
 import json
 import logging
-
 
 from tools import tool_registry
 
@@ -18,322 +21,380 @@ from tools import tool_registry
 
 class TaskPlanner:
 
-    def optimize_plan(self, plan):
+
+    def __init__(
+            self,
+            llm_client
+    ):
+
+        self.llm = llm_client
+
+        self.logger = logging.getLogger(
+            __name__
+        )
+
+
+
+    def optimize_plan(
+            self,
+            plan
+    ):
+
         """
-        根据工具依赖关系优化任务执行顺序
+        根据任务类型优化执行顺序
         """
-        # 查询任务不需要分析依赖
+
+
+        # 查询任务直接执行
 
         if any(
-            task["tool"]=="query_value"
+            task.get("tool")
+            ==
+            "query_value"
+
             for task in plan
         ):
 
             return plan
 
-        tool_names = [
-            task["tool"]
-            for task in plan
+
+
+        result=[]
+
+
+        tools=[
+
+            t.get("tool")
+
+            for t in plan
+
         ]
 
-        optimized_plan = []
 
-        def add_tool(tool, reason):
 
-            existing_tools = [
-                                 t["tool"]
-                                 for t in optimized_plan
-                             ] + tool_names
+        analysis_tools=[
 
-            if tool not in existing_tools:
-                optimized_plan.append(
-                    {
-                        "tool": tool,
-                        "reason": reason
-                    }
-                )
-
-        # ==========================
-        # 规则1:
-        # 数据分析基础依赖
-        # ==========================
-
-        analysis_tools = [
             "top_product",
+
             "detect_outliers",
+
             "create_chart",
+
             "generate_report",
+
             "generate_markdown_report"
+
         ]
 
-        need_clean = any(
-            tool in tool_names
-            for tool in analysis_tools
-        )
 
-        if need_clean:
-            add_tool(
-                "clean_data",
-                "数据分析前需要清洗数据"
-            )
-
-        # ==========================
-        # 规则2:
-        # 销售分析依赖top_product
-        # ==========================
-
-        report_tools = [
-            "generate_report",
-            "generate_markdown_report"
-        ]
 
         if any(
-                tool in tool_names
-                for tool in report_tools
+            t in tools
+            for t in analysis_tools
         ):
-            add_tool(
-                "top_product",
-                "生成报告前需要分析销售冠军"
+
+
+            result.append(
+
+                {
+
+                    "tool":
+                    "clean_data",
+
+                    "reason":
+                    "数据分析前需要清洗"
+
+                }
+
             )
 
-        # ==========================
-        # 保留原计划
-        # ==========================
-
-        optimized_plan.extend(plan)
-
-        return optimized_plan
 
 
-    def __init__(self, llm_client):
+        result.extend(plan)
 
-        self.llm = llm_client
 
-        self.logger = logging.getLogger(__name__)
+        return result
 
 
 
 
-    def create_plan(self, user_query:str):
 
-        """
-        根据用户需求生成任务计划
-
-
-        返回:
-
-        [
-            {
-                "tool":"clean_data",
-                "reason":"数据分析前需要清洗"
-            }
-        ]
-
-        """
+    def create_plan(
+            self,
+            user_query:str
+    ):
 
 
-
-        # 获取工具列表
 
         tools = tool_registry.list_tools()
 
 
 
-        # 没有需求
+        prompt=f"""
 
-        if not user_query:
-            default_plan = [
+你是企业数据分析Agent规划器。
 
-                {
-                    "tool": "clean_data",
-                    "reason": "默认执行数据清洗"
-                },
 
-                {
-                    "tool": "top_product",
-                    "reason": "分析销售冠军产品"
-                },
 
-                {
-                    "tool": "detect_outliers",
-                    "reason": "检测异常销售数据"
-                },
+你的任务:
 
-                {
-                    "tool": "create_chart",
-                    "reason": "生成数据可视化图表"
-                },
+根据用户需求选择正确工具。
 
-                {
-                    "tool": "generate_report",
-                    "reason": "生成分析报告"
-                },
 
-                {
-                    "tool": "generate_markdown_report",
-                    "reason": "生成Markdown报告"
-                }
+========================
 
-            ]
+工具列表:
 
-            return self.optimize_plan(default_plan)
+{tools}
 
-        prompt = f"""
 
-        你是企业数据查询助手。
+========================
 
-        你的任务：
-        根据用户需求选择工具，并提取查询参数。
 
+【合同财务查询规则】
 
-        ========================
-        客户查询任务规则
-        ========================
 
-        如果用户需求包含：
+如果用户包含:
 
-        查询
-        查找
-        获取
-        搜索
-        指定客户
-        指定合同
-        合同金额
-        余额
 
-        说明用户需要查询已有数据。
+查询
 
+查
 
-        必须选择：
+余额
 
-        query_value
+合同
 
+客户
 
-        并且必须提取完整客户名称。
+客商
 
+期末余额
 
-        例如：
+期初余额
 
-        用户：
+贷方累计
 
-        查询【客商：广东省高速公路有限公司台山分公司】合同金额
+本期贷方
 
 
-        必须返回：
+必须选择:
 
-        [
-            {{
-                "tool":"query_value",
-                "reason":"查询指定客户合同金额",
-                "customer":"广东省高速公路有限公司台山分公司",
-                "metrics":[
-                    "本期贷方",
-                    "贷方累计",
-                    "期末余额"
-                ]
-            }}
-        ]
 
+query_value
 
-        ========================
-        客户名称提取规则
-        ========================
 
 
-        必须保留完整名称。
+========================
 
 
-        例如：
+返回格式:
 
-        用户：
 
-        查【客商：广东省高速公路有限公司广清分公司】
+[
+{{
+"tool":"query_value",
 
+"reason":"查询合同数据",
 
-        返回：
+"customer":"完整客户名称",
 
-        广东省高速公路有限公司广清分公司
+"metrics":[
+"期末余额"
+],
 
+"filters":{{
 
-        禁止返回：
+"业务类型（新）":
+"xxx"
 
-        广东省高速公路有限公司
+}}
 
+}}
+]
 
-        必须保留：
 
-        有限公司
 
-        集团
+========================
 
-        本部
 
-        分公司
+【客户名称规则】
 
-        股份有限公司
 
+必须保留完整客户名称。
 
-        ========================
 
+例如:
 
-        当前可用工具：
 
-        {tools}
+用户:
 
+查保利长大工程有限公司余额
 
 
-        ========================
 
-        用户需求：
+返回:
 
-        {user_query}
 
+保利长大工程有限公司
 
 
-        ========================
 
+禁止:
 
-        请严格返回JSON数组。
 
+保利长大
 
-        格式：
 
 
-        [
-            {{
-                "tool":"工具名称",
-                "reason":"选择原因",
-                "customer":"客户名称",
-                "metrics":[
-                    "需要查询指标"
-                ]
-            }}
-        ]
+必须保留:
 
+有限公司
 
-        注意：
+集团
 
-        1. tool必须来自工具列表
-        2. 不要输出解释
-        3. 只输出JSON
-        """
+分公司
+
+股份有限公司
+
+
+
+========================
+
+
+【多条件过滤规则】
+
+
+用户出现:
+
+
+业务类型
+
+产品类型
+
+合同类型
+
+项目类型
+
+
+必须提取:
+
+filters
+
+
+
+例如:
+
+
+用户:
+
+查询保利长大工程有限公司
+
+业务类型（新）:
+
+公路建设期产品运维(JSYW)
+
+
+
+返回:
+
+
+"filters":{{
+
+"业务类型（新）":
+
+"公路建设期产品运维(JSYW)"
+
+}}
+
+
+
+========================
+
+
+【销售分析】
+
+
+如果用户包含:
+
+
+销售
+
+销量
+
+排行
+
+趋势
+
+异常
+
+报告
+
+
+选择销售分析工具。
+
+
+
+========================
+
+
+用户需求:
+
+
+{user_query}
+
+
+
+========================
+
+
+要求:
+
+
+1. 只能返回JSON数组
+
+
+2. 不允许解释
+
+
+3. tool必须来自工具列表
+
+
+4. filters必须保留
+
+
+5. customer必须完整
+
+
+
+"""
+
 
 
         messages=[
 
             {
-                "role":"system",
+
+                "role":
+                "system",
+
                 "content":
                 """
-你是一个数据分析Agent规划器。
-你必须输出合法JSON。
+你是企业数据Agent规划器。
+只能输出合法JSON。
 """
+
             },
 
 
             {
-                "role":"user",
-                "content":prompt
+
+                "role":
+                "user",
+
+                "content":
+                prompt
+
             }
 
         ]
@@ -343,25 +404,17 @@ class TaskPlanner:
         try:
 
 
-            response=self.llm.chat(
+            response = self.llm.chat(
                 messages
             )
 
 
             print(
-                "\nDeepSeek Planner返回:"
+                "\n===== DeepSeek Planner原始返回 ====="
             )
 
 
             print(response)
-
-
-
-            if not response:
-
-                raise Exception(
-                    "LLM返回为空"
-                )
 
 
 
@@ -371,13 +424,26 @@ class TaskPlanner:
 
             # 去除markdown
 
-            if response.startswith("```"):
+
+            if response.startswith(
+                "```"
+            ):
+
 
                 response=(
 
                     response
-                    .replace("```json","")
-                    .replace("```","")
+
+                    .replace(
+                        "```json",
+                        ""
+                    )
+
+                    .replace(
+                        "```",
+                        ""
+                    )
+
                     .strip()
 
                 )
@@ -390,86 +456,150 @@ class TaskPlanner:
 
 
 
-            # 计划校验
+            valid=[]
 
-            valid_plan=[]
 
 
             for task in plan:
 
 
-                tool_name=task.get(
+                tool=task.get(
                     "tool"
                 )
 
 
-                if tool_name in tools:
+                if tool not in tools:
 
-                    valid_plan.append(
-                        {
-                            "tool": tool_name,
-
-                            "reason": task.get(
-                                "reason",
-                                ""
-                            ),
-
-                            "customer": task.get(
-                                "customer",
-                                ""
-                            ),
-
-                            "metrics": task.get(
-                                "metrics",
-                                []
-                            )
-                        }
-                    )
-
-
-                else:
 
                     print(
-                        f"⚠️ 忽略不存在工具:{tool_name}"
+                        f"忽略不存在工具:{tool}"
                     )
 
-            return self.optimize_plan(valid_plan)
+                    continue
+
+
+
+                valid.append(
+
+                    {
+
+                        "tool":
+                        tool,
+
+
+                        "reason":
+                        task.get(
+                            "reason",
+                            ""
+                        ),
+
+
+                        "customer":
+                        task.get(
+                            "customer",
+                            ""
+                        ),
+
+
+                        "metrics":
+                        task.get(
+                            "metrics",
+                            []
+                        ),
+
+
+                        "filters":
+                        task.get(
+                            "filters",
+                            {}
+
+                        )
+
+                    }
+
+                )
+
+
+
+            print(
+                "\n=====最终Planner计划====="
+            )
+
+
+            print(valid)
+
+
+
+            return self.optimize_plan(
+                valid
+            )
+
 
 
         except Exception as e:
 
 
             self.logger.error(
+
                 f"Planner失败:{e}"
+
             )
 
 
             print(
-                "⚠️ Planner失败，使用默认计划"
+                "Planner失败，使用默认查询"
             )
+
+
+
+            # 默认不要乱分析
+
+            if any(
+                key in user_query
+
+                for key in [
+
+                    "查",
+
+                    "查询",
+
+                    "余额",
+
+                    "合同"
+
+                ]
+
+            ):
+
+
+                return [
+
+                    {
+
+                        "tool":
+                        "query_value",
+
+
+                        "reason":
+                        "默认合同查询"
+
+                    }
+
+                ]
 
 
 
             return [
 
                 {
-                    "tool":"clean_data",
-                    "reason":"默认数据清洗"
-                },
 
-                {
-                    "tool":"top_product",
-                    "reason":"默认销售分析"
-                },
+                    "tool":
+                    "clean_data",
 
-                {
-                    "tool":"detect_outliers",
-                    "reason":"默认异常检测"
-                },
 
-                {
-                    "tool":"generate_report",
-                    "reason":"默认生成报告"
+                    "reason":
+                    "默认数据清洗"
+
                 }
 
             ]

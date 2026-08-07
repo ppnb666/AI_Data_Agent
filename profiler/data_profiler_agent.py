@@ -120,3 +120,59 @@ department:
             }
 
         return schema
+
+
+
+    def select_sheet(
+            self,
+            sheet_profiles,
+            query
+    ):
+
+        prompt = f"""
+
+    你是Excel数据分析专家。
+
+
+    用户需求:
+
+    {query}
+
+
+    下面是Excel所有Sheet信息:
+
+    {sheet_profiles}
+
+
+
+    请选择最适合分析的Sheet。
+
+
+    只返回Sheet名称。
+
+
+    """
+
+        result = self.llm.chat(
+            [
+                {
+                    "role": "system",
+                    "content": "你负责Excel结构理解"
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        sheet_name = result.strip()
+
+        for sheet in sheet_profiles:
+
+            if sheet["sheet"] in sheet_name:
+                return sheet
+
+        # 防止AI乱返回
+
+        return sheet_profiles[0]

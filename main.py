@@ -13,7 +13,7 @@ query = input(
 result = agent.run(
     DATA_PATH,
     user_query=query,
-    with_ai=True
+    with_ai=False
 )
 
 
@@ -44,7 +44,12 @@ f"""
 
 
 匹配合同数量:
-{query_result.get('count')} 条
+业务匹配数量:
+{query_result.get('business_count',0)} 条
+
+
+余额记录数量:
+{query_result.get('count',0)} 条
 
 """
     )
@@ -56,28 +61,22 @@ f"""
         {}
     )
 
-
+    print("\n金额汇总:")
 
     print(
-f"""
-金额汇总:
+        f"期初余额总额: {summary.get('期初余额总额', 0):,.2f}"
+    )
 
-期初余额总额:
-{summary.get('期初余额总额'):,.2f}
+    print(
+        f"本期贷方总额: {summary.get('本期贷方总额', 0):,.2f}"
+    )
 
+    print(
+        f"贷方累计总额: {summary.get('贷方累计总额', 0):,.2f}"
+    )
 
-本期贷方总额:
-{summary.get('本期贷方总额'):,.2f}
-
-
-贷方累计总额:
-{summary.get('贷方累计总额'):,.2f}
-
-
-期末余额总额:
-{summary.get('期末余额总额'):,.2f}
-
-"""
+    print(
+        f"期末余额总额: {summary.get('期末余额总额', 0):,.2f}"
     )
 
 
