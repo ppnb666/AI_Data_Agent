@@ -83,9 +83,12 @@ class DataAgent:
 
         # 读取数据
 
-        df = pd.read_excel(
+        from utils.excel_loader import load_excel
+        df, sheet_name = load_excel(
             state.file_path
         )
+
+        state.sheet_name = sheet_name
 
 
         state.df = df
