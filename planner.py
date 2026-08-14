@@ -1,12 +1,15 @@
 """
-LLM Agent任务规划器 V7
+LLM Agent任务规划器 V8
 
 职责:
 
 1. 理解用户意图
 2. 判断任务类型
 3. 选择执行工具
-4. 提取查询参数
+4. 提取客户
+5. 提取业务过滤条件
+6. 提取比较字段
+7. LLM失败时使用规则Fallback
 
 支持:
 
@@ -28,6 +31,7 @@ detect_anomaly:
 
 import json
 import logging
+import re
 
 from tools import tool_registry
 
@@ -47,17 +51,6 @@ class TaskPlanner:
     # ==================================================
 
     def parse_json_response(self, response):
-        """
-        从LLM返回内容中提取JSON
-
-        支持:
-
-        1. 纯JSON
-        2. ```json ... ```
-        3. 前后带说明文字
-        4. JSON数组
-        5. JSON对象
-        """
 
         if response is None:
 
@@ -65,7 +58,9 @@ class TaskPlanner:
                 "LLM返回为空"
             )
 
-        response = str(response).strip()
+        response = str(
+            response
+        ).strip()
 
         if not response:
 
@@ -124,9 +119,13 @@ class TaskPlanner:
         # ③ 提取JSON数组
         # ---------------------------------------------
 
-        start = cleaned.find("[")
+        start = cleaned.find(
+            "["
+        )
 
-        end = cleaned.rfind("]")
+        end = cleaned.rfind(
+            "]"
+        )
 
         if (
             start != -1
@@ -152,9 +151,13 @@ class TaskPlanner:
         # ④ 提取JSON对象
         # ---------------------------------------------
 
-        start = cleaned.find("{")
+        start = cleaned.find(
+            "{"
+        )
 
-        end = cleaned.rfind("}")
+        end = cleaned.rfind(
+            "}"
+        )
 
         if (
             start != -1
@@ -181,6 +184,360 @@ class TaskPlanner:
         )
 
     # ==================================================
+    # 客户名称提取
+    # ==================================================
+
+    def extract_customer(
+        self,
+        query
+    ):
+
+        """
+        从用户问题中提取客户名称。
+
+        例如:
+
+        查询保利长大工程有限公司
+
+        返回:
+
+        保利长大工程有限公司
+        """
+
+        if not query:
+
+            return ""
+
+        # ---------------------------------------------
+        # 第一优先级:
+        # 公司名称
+        # ---------------------------------------------
+
+        patterns = [
+
+            r"([\u4e00-\u9fa5A-Za-z0-9（）()·\-]{2,30}(?:有限公司|公司|集团|股份有限公司))",
+
+        ]
+
+        for pattern in patterns:
+
+            match = re.search(
+                pattern,
+                query
+            )
+
+            if match:
+
+                return match.group(
+                    1
+                ).strip()
+
+        # ---------------------------------------------
+        # 第二优先级:
+        # 查询 + 名称
+        # ---------------------------------------------
+
+        text = query
+
+        prefixes = [
+
+            "查询",
+            "查询一下",
+            "查一下",
+            "查",
+            "查看",
+            "获取",
+            "分析",
+            "统计"
+
+        ]
+
+        for prefix in prefixes:
+
+            if text.startswith(
+                prefix
+            ):
+
+                text = text[
+                    len(prefix):
+                ]
+
+                break
+
+        # 去掉常见连接词
+
+        text = re.split(
+            r"(的|本期|期末|期初|业务类型|业务种类|金额|余额|是否|比较|大于|小于)",
+            text
+        )[0]
+
+        text = text.strip()
+
+        return text
+
+    # ==================================================
+    # 业务过滤条件提取
+    # ==================================================
+
+    def extract_filters(
+        self,
+        query
+    ):
+
+        """
+        提取业务类型等过滤条件。
+
+        例如:
+
+        查询保利长大工程有限公司的
+        公路建设期产品运维(JSYW)
+
+        返回:
+
+        {
+            "业务类型（新）":
+            "公路建设期产品运维(JSYW)"
+        }
+        """
+
+        filters = {}
+
+        if not query:
+
+            return filters
+
+        # ---------------------------------------------
+        # 业务类型（新）
+        # ---------------------------------------------
+
+        match = re.search(
+            r"(公路建设期产品运维\(JSYW\))",
+            query
+        )
+
+        if match:
+
+            filters[
+                "业务类型（新）"
+            ] = match.group(
+                1
+            )
+
+        # ---------------------------------------------
+        # 更通用:
+        # "业务类型（新）: xxx"
+        # ---------------------------------------------
+
+        match = re.search(
+            r"业务类型（新）\s*[:：]\s*([^，,。；;\n]+)",
+            query
+        )
+
+        if match:
+
+            filters[
+                "业务类型（新）"
+            ] = match.group(
+                1
+            ).strip()
+
+        # ---------------------------------------------
+        # 业务类型
+        # ---------------------------------------------
+
+        match = re.search(
+            r"业务类型\s*[:：]\s*([^，,。；;\n]+)",
+            query
+        )
+
+        if match:
+
+            filters[
+                "业务类型"
+            ] = match.group(
+                1
+            ).strip()
+
+        # ---------------------------------------------
+        # 业务种类
+        # ---------------------------------------------
+
+        match = re.search(
+            r"业务种类\s*[:：]\s*([^，,。；;\n]+)",
+            query
+        )
+
+        if match:
+
+            filters[
+                "业务种类"
+            ] = match.group(
+                1
+            ).strip()
+
+        return filters
+
+    # ==================================================
+    # 比较条件提取
+    # ==================================================
+
+    def extract_compare(
+        self,
+        query
+    ):
+
+        """
+        提取字段比较条件。
+
+        例如:
+
+        本期贷方和贷方累计是否相等
+
+        返回:
+
+        {
+            "left": "本期贷方",
+            "right": "贷方累计",
+            "operator": "=="
+        }
+        """
+
+        if not query:
+
+            return {}
+
+        # ---------------------------------------------
+        # 字段名称
+        # ---------------------------------------------
+
+        left = None
+        right = None
+
+        if (
+            "本期贷方" in query
+            and "贷方累计" in query
+        ):
+
+            left = "本期贷方"
+
+            right = "贷方累计"
+
+        elif (
+            "期初余额" in query
+            and "期末余额" in query
+        ):
+
+            left = "期初余额"
+
+            right = "期末余额"
+
+        elif (
+            "本期贷方" in query
+            and "期末余额" in query
+        ):
+
+            left = "本期贷方"
+
+            right = "期末余额"
+
+        # 如果没有找到两个字段
+
+        if not left or not right:
+
+            return {}
+
+        # ---------------------------------------------
+        # 运算符
+        # ---------------------------------------------
+
+        if any(
+            word in query
+            for word in [
+                "是否相等",
+                "相等",
+                "一致",
+                "相同",
+                "一样",
+                "等于"
+            ]
+        ):
+
+            operator = "=="
+
+        elif any(
+            word in query
+            for word in [
+                "不相等",
+                "不一致",
+                "不同",
+                "有差别",
+                "差异"
+            ]
+        ):
+
+            operator = "!="
+
+        elif any(
+            word in query
+            for word in [
+                "不少于",
+                "至少",
+                "大于等于"
+            ]
+        ):
+
+            operator = ">="
+
+        elif any(
+            word in query
+            for word in [
+                "不超过",
+                "最多",
+                "小于等于"
+            ]
+        ):
+
+            operator = "<="
+
+        elif any(
+            word in query
+            for word in [
+                "大于",
+                "超过",
+                "高于"
+            ]
+        ):
+
+            operator = ">"
+
+        elif any(
+            word in query
+            for word in [
+                "小于",
+                "低于"
+            ]
+        ):
+
+            operator = "<"
+
+        else:
+
+            return {}
+
+        return {
+
+            "left":
+            left,
+
+            "right":
+            right,
+
+            "operator":
+            operator
+
+        }
+
+    # ==================================================
     # 创建任务计划
     # ==================================================
 
@@ -195,10 +552,7 @@ class TaskPlanner:
 
 你是企业级AI数据分析Agent规划器。
 
-你的任务:
-
-根据用户自然语言需求，
-生成执行计划。
+根据用户自然语言需求生成执行计划。
 
 ======================
 
@@ -208,150 +562,99 @@ class TaskPlanner:
 
 ======================
 
-【任务分类规则】
+【任务分类】
 
-一、普通查询
+普通查询:
 
-用户出现:
+查询、查、查看、多少、余额、金额
 
-查询
-查
-查看
-多少
-余额
-金额
-
-选择:
+使用:
 
 query_value
 
-返回:
 
-{{
-"tool":"query_value",
-"customer":"客户名称",
-"metrics":["字段"],
-"filters":{{}}
-}}
+字段比较:
 
-======================
+比较、是否相等、是否一致、相同、一样、
+不相等、不同、差异、大于、超过、高于、
+小于、低于、不少于、不超过
 
-二、字段比较 ⭐
-
-用户出现:
-
-比较
-
-是否相等
-
-是否一致
-
-相同
-
-一样
-
-不相等
-
-不同
-
-差异
-
-大于
-
-超过
-
-高于
-
-小于
-
-低于
-
-不少于
-
-不超过
-
-选择:
+使用:
 
 compare_rows
 
-======================
 
-【比较运算符规则】
+汇总:
 
-相等:
+合计、总额、统计、汇总
 
-是否相等
-等于
-一致
-相同
-一样
+使用:
 
-operator:
+aggregate_value
 
-"=="
 
-----------------------
+排名:
 
-不相等:
+最高、最低、排名、TOP
 
-不相等
-不同
-不一致
-差异
-有差别
+使用:
 
-operator:
+rank_rows
 
-"!="
 
-----------------------
+异常:
 
-大于:
+异常、波动、异常数据
 
-大于
-超过
-高于
+使用:
 
-operator:
+detect_anomaly
 
-">"
-
-----------------------
-
-小于:
-
-小于
-低于
-
-operator:
-
-"<"
-
-----------------------
-
-大于等于:
-
-不少于
-至少
-
-operator:
-
-">="
-
-----------------------
-
-小于等于:
-
-不超过
-最多
-
-operator:
-
-"<="
 
 ======================
 
-【compare格式】
+【客户提取规则】
+
+必须完整提取客户名称。
+
+例如:
+
+用户:
+
+查询保利长大工程有限公司
+
+必须返回:
+
+"customer":"保利长大工程有限公司"
+
+禁止返回:
+
+"保利长大"
+
+
+======================
+
+【过滤条件】
+
+如果用户指定业务条件，必须放入filters。
+
+例如:
+
+业务类型（新）:
+公路建设期产品运维(JSYW)
+
+返回:
+
+"filters":
+{{
+    "业务类型（新）":
+    "公路建设期产品运维(JSYW)"
+}}
+
+
+======================
+
+【比较格式】
 
 必须返回:
 
@@ -362,183 +665,48 @@ operator:
     "operator":"运算符"
 }}
 
-======================
 
-示例:
+相等:
 
-用户:
+"=="
 
-查询A公司本期贷方和贷方累计是否相等
 
-返回:
+不相等:
 
-[
-{{
-"tool":"compare_rows",
+"!="
 
-"customer":"A公司",
 
-"filters":{{}},
+大于:
 
-"compare":
-{{
-"left":"本期贷方",
+">"
 
-"right":"贷方累计",
 
-"operator":"=="
-}},
+小于:
 
-"output":"rows"
+"<"
 
-}}
-]
 
-用户:
+大于等于:
 
-查询A公司本期贷方和贷方累计不相等的数据
+">="
 
-返回:
 
-[
-{{
-"tool":"compare_rows",
+小于等于:
 
-"customer":"A公司",
+"<="
 
-"filters":{{}},
-
-"compare":
-{{
-"left":"本期贷方",
-
-"right":"贷方累计",
-
-"operator":"!="
-}},
-
-"output":"rows"
-
-}}
-]
-
-用户:
-
-查询A公司期末余额大于100万的数据
-
-返回:
-
-[
-{{
-"tool":"compare_rows",
-
-"customer":"A公司",
-
-"filters":{{}},
-
-"compare":
-{{
-"left":"期末余额",
-
-"right":"100万",
-
-"operator":">"
-}},
-
-"output":"rows"
-
-}}
-]
 
 ======================
 
-三、汇总统计
+【重要】
 
-用户出现:
+即使用户只说:
 
-合计
+查询保利长大工程有限公司
 
-总额
+也必须生成有效任务。
 
-统计
-
-汇总
-
-选择:
-
-aggregate_value
-
-======================
-
-四、排序排名
-
-用户出现:
-
-最高
-
-最低
-
-排名
-
-TOP
-
-选择:
-
-rank_rows
-
-======================
-
-五、异常检测
-
-用户出现:
-
-异常
-
-波动
-
-异常数据
-
-选择:
-
-detect_anomaly
-
-======================
-
-【字段提取规则】
-
-客户:
-
-必须完整保留。
-
-例如:
-
-正确:
-
-保利长大工程有限公司
-
-错误:
-
-保利长大
-
-业务条件:
-
-必须放入filters。
-
-例如:
-
-用户:
-
-业务类型（新）:
-公路建设期产品运维(JSYW)
-
-返回:
-
-"filters":
-
-{{
-"业务类型（新）":
-"公路建设期产品运维(JSYW)"
-}}
+不能返回空数组。
 
 ======================
 
@@ -552,23 +720,18 @@ detect_anomaly
 
 [
 {{
-"tool":"",
-
-"reason":"",
-
-"customer":"",
-
-"metrics":[],
-
-"filters":{{}},
-
-"compare":{{}},
-
-"condition":{{}},
-
-"output":""
+    "tool":"",
+    "reason":"",
+    "customer":"",
+    "metrics":[],
+    "filters":{{}},
+    "compare":{{}},
+    "condition":{{}},
+    "output":"rows"
 }}
 ]
+
+======================
 
 用户需求:
 
@@ -579,17 +742,27 @@ detect_anomaly
         messages = [
 
             {
-                "role": "system",
+                "role":
+                "system",
+
                 "content":
                 """
 你是企业数据Agent规划器。
-只能输出JSON数组。
+
+必须严格返回JSON数组。
+
+不能返回空数组。
+
+必须提取用户问题中的客户名称。
 """
             },
 
             {
-                "role": "user",
-                "content": prompt
+                "role":
+                "user",
+
+                "content":
+                prompt
             }
 
         ]
@@ -606,17 +779,9 @@ detect_anomaly
 
             print(response)
 
-            # ==========================================
-            # JSON解析
-            # ==========================================
-
             plan = self.parse_json_response(
                 response
             )
-
-            # ==========================================
-            # 校验JSON类型
-            # ==========================================
 
             if not isinstance(
                 plan,
@@ -641,10 +806,6 @@ detect_anomaly
                 tool = task.get(
                     "tool"
                 )
-
-                # --------------------------------------
-                # 工具存在性检查
-                # --------------------------------------
 
                 if tool not in tools:
 
@@ -700,14 +861,14 @@ detect_anomaly
                         "output":
                         task.get(
                             "output",
-                            ""
+                            "rows"
                         )
                     }
 
                 )
 
             # ==========================================
-            # 如果LLM返回了JSON，但是没有有效工具
+            # 关键修复
             # ==========================================
 
             if not valid:
@@ -716,8 +877,66 @@ detect_anomaly
                     "Planner没有生成有效任务"
                 )
 
+            # ==========================================
+            # 对LLM结果进行补全
+            #
+            # 防止LLM返回:
+            #
+            # {
+            #   "tool":"query_value"
+            # }
+            #
+            # 但是没有customer
+            # ==========================================
+
+            for task in valid:
+
+                if not task.get(
+                    "customer"
+                ):
+
+                    task["customer"] = (
+                        self.extract_customer(
+                            user_query
+                        )
+                    )
+
+                if not task.get(
+                    "filters"
+                ):
+
+                    task["filters"] = (
+                        self.extract_filters(
+                            user_query
+                        )
+                    )
+
+                if (
+                    task["tool"]
+                    == "compare_rows"
+                ):
+
+                    compare = task.get(
+                        "compare",
+                        {}
+                    )
+
+                    if not compare.get(
+                        "left"
+                    ):
+
+                        compare = (
+                            self.extract_compare(
+                                user_query
+                            )
+                        )
+
+                    task["compare"] = (
+                        compare
+                    )
+
             print(
-                "\n===== V7 Planner计划 ====="
+                "\n===== V8 Planner计划 ====="
             )
 
             print(valid)
@@ -748,82 +967,39 @@ detect_anomaly
         query
     ):
 
-        compare_keywords = [
+        """
+        LLM失败时的本地规则规划器。
 
-            "比较",
-            "是否",
-            "相等",
-            "一致",
-            "不相等",
-            "不同",
-            "差异",
-            "大于",
-            "超过",
-            "高于",
-            "小于",
-            "低于",
-            "不少于",
-            "不超过"
+        重点:
 
-        ]
+        即使DeepSeek返回 []
 
-        if any(
-            k in query
-            for k in compare_keywords
-        ):
+        也可以继续完成基本查询。
+        """
 
-            # =========================================
-            # 相等
-            # =========================================
+        customer = (
+            self.extract_customer(
+                query
+            )
+        )
 
-            if any(
-                k in query
-                for k in [
-                    "相等",
-                    "一致",
-                    "相同",
-                    "一样"
-                ]
-            ):
+        filters = (
+            self.extract_filters(
+                query
+            )
+        )
 
-                operator = "=="
+        compare = (
+            self.extract_compare(
+                query
+            )
+        )
 
-            # =========================================
-            # 大于
-            # =========================================
+        # ==================================================
+        # ① 比较任务
+        # ==================================================
 
-            elif any(
-                k in query
-                for k in [
-                    "大于",
-                    "超过",
-                    "高于"
-                ]
-            ):
-
-                operator = ">"
-
-            # =========================================
-            # 小于
-            # =========================================
-
-            elif any(
-                k in query
-                for k in [
-                    "小于",
-                    "低于"
-                ]
-            ):
-
-                operator = "<"
-
-            # =========================================
-            # 默认不相等
-            # =========================================
-
-            else:
-
-                operator = "!="
+        if compare:
 
             return [
 
@@ -832,16 +1008,163 @@ detect_anomaly
                     "compare_rows",
 
                     "reason":
-                    "关键词判断比较任务",
+                    "LLM失败，使用本地规则识别比较任务",
+
+                    "customer":
+                    customer,
+
+                    "metrics":
+                    [],
+
+                    "filters":
+                    filters,
 
                     "compare":
-                    {
-                        "operator":
-                        operator
-                    }
+                    compare,
+
+                    "condition":
+                    {},
+
+                    "output":
+                    "rows"
                 }
 
             ]
+
+        # ==================================================
+        # ② 汇总任务
+        # ==================================================
+
+        if any(
+            keyword in query
+            for keyword in [
+                "合计",
+                "总额",
+                "统计",
+                "汇总"
+            ]
+        ):
+
+            return [
+
+                {
+                    "tool":
+                    "aggregate_value",
+
+                    "reason":
+                    "LLM失败，使用关键词判断汇总任务",
+
+                    "customer":
+                    customer,
+
+                    "metrics":
+                    [],
+
+                    "filters":
+                    filters,
+
+                    "compare":
+                    {},
+
+                    "condition":
+                    {},
+
+                    "output":
+                    "summary"
+                }
+
+            ]
+
+        # ==================================================
+        # ③ 排名任务
+        # ==================================================
+
+        if any(
+            keyword in query
+            for keyword in [
+                "最高",
+                "最低",
+                "排名",
+                "TOP"
+            ]
+        ):
+
+            return [
+
+                {
+                    "tool":
+                    "rank_rows",
+
+                    "reason":
+                    "LLM失败，使用关键词判断排名任务",
+
+                    "customer":
+                    customer,
+
+                    "metrics":
+                    [],
+
+                    "filters":
+                    filters,
+
+                    "compare":
+                    {},
+
+                    "condition":
+                    {},
+
+                    "output":
+                    "rows"
+                }
+
+            ]
+
+        # ==================================================
+        # ④ 异常检测
+        # ==================================================
+
+        if any(
+            keyword in query
+            for keyword in [
+                "异常",
+                "波动",
+                "异常数据"
+            ]
+        ):
+
+            return [
+
+                {
+                    "tool":
+                    "detect_anomaly",
+
+                    "reason":
+                    "LLM失败，使用关键词判断异常任务",
+
+                    "customer":
+                    customer,
+
+                    "metrics":
+                    [],
+
+                    "filters":
+                    filters,
+
+                    "compare":
+                    {},
+
+                    "condition":
+                    {},
+
+                    "output":
+                    "rows"
+                }
+
+            ]
+
+        # ==================================================
+        # ⑤ 普通查询
+        # ==================================================
 
         return [
 
@@ -850,7 +1173,25 @@ detect_anomaly
                 "query_value",
 
                 "reason":
-                "默认查询"
+                "LLM失败，使用本地规则判断普通查询",
+
+                "customer":
+                customer,
+
+                "metrics":
+                [],
+
+                "filters":
+                filters,
+
+                "compare":
+                {},
+
+                "condition":
+                {},
+
+                "output":
+                "rows"
             }
 
         ]
