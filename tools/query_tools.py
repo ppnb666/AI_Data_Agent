@@ -9,25 +9,34 @@ def clean_schema_field(field):
     """
     去除Schema字段前缀
 
-    Sheet1.客商名称 -> 客商名称
+    例如：
+
+    Sheet1.客商名称
+        ↓
+    客商名称
     """
 
+    if not field:
+        return ""
+
+    field = str(field)
+
     if "." in field:
-        return field.split(".")[-1]
+        return field.split(".", 1)[-1]
 
     return field
 
 
 # ==========================================================
-# Planner任务
+# 获取Planner任务
 # ==========================================================
 
 def get_query_task(state):
     """
-    获取query_value任务
+    获取 query_value 任务
     """
 
-    for task in state.plan:
+    for task in getattr(state, "plan", []):
 
         if task.get("tool") == "query_value":
             return task
@@ -36,119 +45,446 @@ def get_query_task(state):
 
 
 # ==========================================================
+# 获取Schema字段
+# ==========================================================
+
+def get_schema_fields(schema, category):
+    """
+    获取Schema中的字段。
+
+    支持：
+
+    customer
+    business
+    product
+    department
+    project
+    money
+    number
+    time
+    """
+
+    if category == "time":
+
+        fields = schema.get(
+            "time_fields",
+            []
+        )
+
+    elif category in schema.get(
+        "entities",
+        {}
+    ):
+
+        fields = schema.get(
+            "entities",
+            {}
+        ).get(
+            category,
+            []
+        )
+
+    elif category in schema.get(
+        "metrics",
+        {}
+    ):
+
+        fields = schema.get(
+            "metrics",
+            {}
+        ).get(
+            category,
+            []
+        )
+
+    else:
+
+        fields = []
+
+    return [
+        clean_schema_field(field)
+        for field in fields
+    ]
+
+
+# ==========================================================
+# 获取全部Schema字段
+# ==========================================================
+
+def get_all_schema_fields(schema):
+    """
+    获取Schema中所有字段。
+    """
+
+    result = []
+
+    entities = schema.get(
+        "entities",
+        {}
+    )
+
+    for fields in entities.values():
+
+        result.extend(fields)
+
+    metrics = schema.get(
+        "metrics",
+        {}
+    )
+
+    for fields in metrics.values():
+
+        result.extend(fields)
+
+    result.extend(
+        schema.get(
+            "time_fields",
+            []
+        )
+    )
+
+    return list(
+        dict.fromkeys(
+            clean_schema_field(x)
+            for x in result
+        )
+    )
+
+
+# ==========================================================
+# 字段匹配
+# ==========================================================
+
+def match_field(
+    schema,
+    columns,
+    user_field
+):
+    """
+    将Planner逻辑字段
+    映射到当前Sheet真实字段。
+
+    匹配优先级：
+
+    1. 精确匹配
+    2. Schema字段匹配
+    3. 包含匹配
+    4. Schema模糊匹配
+    """
+
+    if not user_field:
+        return None
+
+    user_field = clean_schema_field(
+        user_field
+    )
+
+    columns = [
+        str(x).strip()
+        for x in columns
+    ]
+
+    # ------------------------------------------------------
+    # 1. 精确匹配
+    # ------------------------------------------------------
+
+    if user_field in columns:
+        return user_field
+
+    # ------------------------------------------------------
+    # 2. Schema字段
+    # ------------------------------------------------------
+
+    schema_fields = get_all_schema_fields(
+        schema
+    )
+
+    for schema_field in schema_fields:
+
+        if schema_field not in columns:
+            continue
+
+        if user_field == schema_field:
+            return schema_field
+
+    # ------------------------------------------------------
+    # 3. 包含匹配
+    # ------------------------------------------------------
+
+    for column in columns:
+
+        if (
+            user_field in column
+            or
+            column in user_field
+        ):
+
+            return column
+
+    # ------------------------------------------------------
+    # 4. Schema模糊匹配
+    # ------------------------------------------------------
+
+    for schema_field in schema_fields:
+
+        if schema_field not in columns:
+            continue
+
+        if (
+            user_field in schema_field
+            or
+            schema_field in user_field
+        ):
+
+            return schema_field
+
+    return None
+
+
+# ==========================================================
 # 找客户字段
 # ==========================================================
 
-def find_customer_field(schema, columns):
+def find_customer_field(
+    schema,
+    columns
+):
     """
-    根据Schema寻找当前Sheet的客户字段
+    根据Schema寻找当前Sheet中的客户字段。
     """
 
-    customer_fields = [
-        clean_schema_field(x)
-        for x in
-        schema
-        .get("entities", {})
-        .get("customer", [])
-    ]
+    customer_fields = get_schema_fields(
+        schema,
+        "customer"
+    )
+
+    # ------------------------------------------------------
+    # 1. Schema优先
+    # ------------------------------------------------------
 
     for field in customer_fields:
 
         if field in columns:
             return field
 
-    return None
-
-
-# ==========================================================
-# 找业务字段
-# ==========================================================
-
-def find_business_field(
-    schema,
-    columns,
-    filter_key
-):
-    """
-    根据Planner中的filter key寻找真实字段
-
-    支持：
-
-    业务类型（新）
-    ->
-    业务类型（新）名称
-
-    业务类型
-    ->
-    业务类型
-    """
-
     # ------------------------------------------------------
-    # 1. 精确匹配
+    # 2. 兜底
     # ------------------------------------------------------
 
-    if filter_key in columns:
-        return filter_key
-
-    # ------------------------------------------------------
-    # 2. Schema业务字段
-    # ------------------------------------------------------
-
-    business_fields = [
-        clean_schema_field(x)
-        for x in
-        schema
-        .get("entities", {})
-        .get("business", [])
+    customer_keywords = [
+        "客商名称",
+        "客户名称",
+        "客户",
+        "客商"
     ]
-
-    for field in business_fields:
-
-        if field not in columns:
-            continue
-
-        if (
-            filter_key == field
-            or filter_key in field
-            or field in filter_key
-        ):
-            return field
-
-    # ------------------------------------------------------
-    # 3. 模糊匹配
-    # ------------------------------------------------------
 
     for column in columns:
 
-        if (
-            filter_key in column
-            or column in filter_key
+        if any(
+            keyword in str(column)
+            for keyword in customer_keywords
         ):
+
             return column
 
     return None
 
 
 # ==========================================================
-# 找金额字段
+# 找任意字段
 # ==========================================================
 
-def get_money_fields(schema):
+def find_any_field(
+    schema,
+    columns,
+    key
+):
     """
-    获取Schema中的金额字段
+    根据用户语义寻找字段。
     """
 
-    return [
-        clean_schema_field(x)
-        for x in
-        schema
-        .get("metrics", {})
-        .get("money", [])
+    if not key:
+        return None
+
+    # ------------------------------------------------------
+    # 1. 明确字段匹配
+    # ------------------------------------------------------
+
+    field = match_field(
+        schema,
+        columns,
+        key
+    )
+
+    if field:
+        return field
+
+    key = str(key)
+
+    # ------------------------------------------------------
+    # 2. 业务对象特殊处理
+    #
+    # 例如：
+    #
+    # 业务对象 = 合同
+    #
+    # 应该寻找：
+    #
+    # 合同名称
+    # ------------------------------------------------------
+
+    special_keywords = {
+
+        "业务对象": [
+            "合同名称",
+            "合同"
+        ],
+
+        "合同": [
+            "合同名称",
+            "合同"
+        ],
+
+        "合同名称": [
+            "合同名称"
+        ],
+
+        "业务条件": [
+            "业务类型（新）名称",
+            "业务类型",
+            "业务种类"
+        ]
+    }
+
+    if key in special_keywords:
+
+        candidates = special_keywords[key]
+
+        # 优先当前Sheet真实字段
+        for candidate in candidates:
+
+            for column in columns:
+
+                if candidate == str(column):
+
+                    return column
+
+        # 再做包含匹配
+        for candidate in candidates:
+
+            for column in columns:
+
+                if candidate in str(column):
+
+                    return column
+
+    # ------------------------------------------------------
+    # 3. 通用语义匹配
+    # ------------------------------------------------------
+
+    category_keywords = {
+
+        "customer": [
+            "客户",
+            "客商"
+        ],
+
+        "business": [
+            "业务"
+        ],
+
+        "product": [
+            "产品",
+            "商品"
+        ],
+
+        "department": [
+            "部门",
+            "事业部",
+            "组织"
+        ],
+
+        "project": [
+            "项目"
+        ],
+
+        "time": [
+            "时间",
+            "日期",
+            "月份",
+            "年份",
+            "年度",
+            "期间",
+            "账期"
+        ]
+    }
+
+    for category, keywords in category_keywords.items():
+
+        if any(
+            keyword in key
+            for keyword in keywords
+        ):
+
+            fields = get_schema_fields(
+                schema,
+                category
+            )
+
+            for field in fields:
+
+                if field in columns:
+
+                    return field
+
+    return None
+
+
+# ==========================================================
+# 获取客户标准化名称
+# ==========================================================
+
+def normalize_customer(value):
+    """
+    标准化客户名称。
+
+    支持：
+
+    【客商：xxx】
+    【客户：xxx】
+    客商：xxx
+    客户：xxx
+    """
+
+    if pd.isna(value):
+        return ""
+
+    value = str(value).strip()
+
+    wrappers = [
+        ("【客商：", "】"),
+        ("【客户：", "】"),
+        ("客商：", ""),
+        ("客户：", "")
     ]
 
+    for start, end in wrappers:
+
+        if value.startswith(start):
+
+            value = value[len(start):]
+
+            if end and value.endswith(end):
+
+                value = value[:-len(end)]
+
+            break
+
+    return value.strip()
+
 
 # ==========================================================
-# 客户匹配
+# 客户过滤
 # ==========================================================
 
 def filter_customer(
@@ -157,21 +493,29 @@ def filter_customer(
     customer
 ):
     """
-    对客户进行模糊匹配
+    客户模糊查询。
     """
 
     if (
-        customer_field is None
-        or customer_field not in df.columns
+        not customer_field
+        or
+        customer_field not in df.columns
     ):
 
         return df.iloc[0:0].copy()
 
-    return df[
+    target = normalize_customer(
+        customer
+    )
+
+    normalized = (
         df[customer_field]
-        .astype(str)
-        .str.contains(
-            customer,
+        .apply(normalize_customer)
+    )
+
+    return df[
+        normalized.str.contains(
+            target,
             na=False,
             regex=False
         )
@@ -179,48 +523,7 @@ def filter_customer(
 
 
 # ==========================================================
-# 标准化客户名称
-# ==========================================================
-
-def normalize_customer(value):
-    """
-    简单标准化客户名称。
-
-    处理：
-
-    【客商：保利长大工程有限公司】
-    保利长大工程有限公司
-
-    统一成：
-
-    保利长大工程有限公司
-    """
-
-    if pd.isna(value):
-        return ""
-
-    value = str(value).strip()
-
-    # ------------------------------------------------------
-    # 去掉常见客商包装
-    # ------------------------------------------------------
-
-    if value.startswith("【客商："):
-
-        value = value.replace(
-            "【客商：",
-            "",
-            1
-        )
-
-        if value.endswith("】"):
-            value = value[:-1]
-
-    return value.strip()
-
-
-# ==========================================================
-# 获取客户关联键
+# 获取客户关联Key
 # ==========================================================
 
 def get_customer_keys(
@@ -228,12 +531,13 @@ def get_customer_keys(
     customer_field
 ):
     """
-    获取当前Sheet中的标准化客户关联键
+    获取当前Sheet客户关联键。
     """
 
     if (
-        customer_field is None
-        or customer_field not in df.columns
+        not customer_field
+        or
+        customer_field not in df.columns
     ):
 
         return set()
@@ -252,7 +556,7 @@ def get_customer_keys(
 
 
 # ==========================================================
-# 根据关联键过滤Sheet
+# 根据客户Key过滤
 # ==========================================================
 
 def filter_by_customer_keys(
@@ -261,12 +565,13 @@ def filter_by_customer_keys(
     customer_keys
 ):
     """
-    使用标准化后的客户名称进行关联过滤
+    根据客户关联键过滤Sheet。
     """
 
     if (
-        customer_field is None
-        or customer_field not in df.columns
+        not customer_field
+        or
+        customer_field not in df.columns
     ):
 
         return df.iloc[0:0].copy()
@@ -277,14 +582,12 @@ def filter_by_customer_keys(
     )
 
     return df[
-        normalized.isin(
-            customer_keys
-        )
+        normalized.isin(customer_keys)
     ]
 
 
 # ==========================================================
-# 应用业务过滤
+# 应用Filter
 # ==========================================================
 
 def apply_filters(
@@ -293,12 +596,24 @@ def apply_filters(
     filters
 ):
     """
-    对当前Sheet应用业务条件
+    应用Planner产生的filters。
 
-    返回：
+    例如：
 
-        filtered_df
-        matched_fields
+    {
+        "业务条件": "公路建设期产品运维(JSYW)",
+        "业务对象": "合同"
+    }
+
+    会自动映射为：
+
+    业务条件
+        ↓
+    业务类型（新）名称
+
+    业务对象
+        ↓
+    合同名称
     """
 
     temp = df.copy()
@@ -307,7 +622,17 @@ def apply_filters(
 
     for key, value in filters.items():
 
-        target_field = find_business_field(
+        if value is None:
+            continue
+
+        if str(value).strip() == "":
+            continue
+
+        # --------------------------------------------------
+        # 找字段
+        # --------------------------------------------------
+
+        target_field = find_any_field(
             schema,
             list(temp.columns),
             key
@@ -315,12 +640,26 @@ def apply_filters(
 
         if not target_field:
 
+            print(
+                f"⚠️ Filter字段无法匹配: {key}"
+            )
+
             return (
                 temp.iloc[0:0].copy(),
                 matched_fields
             )
 
         matched_fields[key] = target_field
+
+        print(
+            f"过滤条件: {key} "
+            f"→ {target_field} "
+            f"= {value}"
+        )
+
+        # --------------------------------------------------
+        # 执行过滤
+        # --------------------------------------------------
 
         temp = temp[
             temp[target_field]
@@ -333,7 +672,6 @@ def apply_filters(
         ]
 
         if len(temp) == 0:
-
             break
 
     return (
@@ -343,69 +681,40 @@ def apply_filters(
 
 
 # ==========================================================
-# 判断一个Sheet是不是过滤条件所在Sheet
+# 找Metric字段
 # ==========================================================
 
-def sheet_contains_filters(
+def find_metric_fields(
     df,
     schema,
-    filters
-):
-    """
-    判断当前Sheet是否包含所有filter字段
-    """
-
-    if not filters:
-        return False
-
-    for key in filters:
-
-        field = find_business_field(
-            schema,
-            list(df.columns),
-            key
-        )
-
-        if not field:
-
-            return False
-
-    return True
-
-
-# ==========================================================
-# 根据metrics寻找目标Sheet
-# ==========================================================
-
-def sheet_contains_metrics(
-    df,
     metrics
 ):
     """
-    判断Sheet是否包含Planner请求的指标字段
+    将Planner中的metrics
+    映射为当前Sheet真实字段。
     """
 
-    if not metrics:
-        return False
+    result = []
 
-    columns = set(
-        df.columns
-    )
+    columns = list(df.columns)
 
     for metric in metrics:
 
-        metric = clean_schema_field(
+        field = match_field(
+            schema,
+            columns,
             metric
         )
 
-        if metric in columns:
-            return True
+        if field and field not in result:
 
-    return False
+            result.append(field)
+
+    return result
 
 
 # ==========================================================
-# 行转换
+# DataFrame -> Rows
 # ==========================================================
 
 def dataframe_to_rows(
@@ -413,12 +722,7 @@ def dataframe_to_rows(
     sheet_name
 ):
     """
-    将DataFrame转成结构化rows。
-
-    注意：
-
-    每个Sheet只返回自己拥有的字段，
-    不再把不同Sheet的列强行拼接。
+    DataFrame转结构化数据。
     """
 
     if len(df) == 0:
@@ -440,52 +744,90 @@ def dataframe_to_rows(
 
 
 # ==========================================================
-# query_value
+# 空结果
+# ==========================================================
+
+def empty_result(
+    customer,
+    filters,
+    metrics,
+    message="没有匹配数据"
+):
+
+    return {
+
+        "type":
+            "query_value",
+
+        "status":
+            "success",
+
+        "message":
+            message,
+
+        "customer":
+            customer,
+
+        "filters":
+            filters,
+
+        "metrics":
+            metrics,
+
+        "total_count":
+            0,
+
+        "matched_count":
+            0,
+
+        "business_count":
+            0,
+
+        "sheet_counts":
+            {},
+
+        "summary":
+            {},
+
+        "data":
+            {
+                "rows":
+                    []
+            }
+    }
+
+
+# ==========================================================
+# Query Value Tool
 # ==========================================================
 
 def query_value_tool(state):
     """
-    Schema驱动多Sheet查询。
+    通用Schema驱动查询工具。
 
     支持：
 
-    1. 普通客户查询
-    2. Sheet内业务过滤
-    3. 跨Sheet业务条件JOIN
-    4. 根据metrics选择目标Sheet
-    5. 客商名称作为跨Sheet关联键
-    6. 金额汇总
-
-    跨Sheet JOIN逻辑：
-
-        Sheet2业务过滤
-              ↓
-        得到客户关联键
-              ↓
-        JOIN Sheet1
-              ↓
-        获取Sheet1指标
-
-    例如：
-
-        业务类型（新）= JSYW
-              ↓
-        Sheet2找到客户
-              ↓
-        客商名称
-              ↓
-        Sheet1
-              ↓
-        期末余额
+    1. 客户查询
+    2. 多Sheet查询
+    3. 任意字段过滤
+    4. 多条件过滤
+    5. 合同查询
+    6. 产品查询
+    7. 部门查询
+    8. 项目查询
+    9. 指标字段定位
+    10. 跨Sheet客户JOIN
+    11. 金额汇总
+    12. 多Sheet结果返回
     """
 
     schema = state.workbook_schema
 
     sheets = state.sheet_profiles
 
-    # ==================================================
-    # 获取Planner任务
-    # ==================================================
+    # ======================================================
+    # 1. 获取任务
+    # ======================================================
 
     task = get_query_task(
         state
@@ -493,21 +835,12 @@ def query_value_tool(state):
 
     if not task:
 
-        return {
-            "type": "query_value",
-            "status": "failed",
-            "message": "没有找到query_value任务",
-            "customer": "",
-            "filters": {},
-            "metrics": [],
-            "total_count": 0,
-            "matched_count": 0,
-            "business_count": 0,
-            "summary": {},
-            "data": {
-                "rows": []
-            }
-        }
+        return empty_result(
+            "",
+            {},
+            [],
+            "没有找到query_value任务"
+        )
 
     customer = task.get(
         "customer",
@@ -524,45 +857,28 @@ def query_value_tool(state):
         []
     )
 
-    # ==================================================
-    # 客户校验
-    # ==================================================
-
-    if not customer:
-
-        return {
-            "type": "query_value",
-            "status": "failed",
-            "message": "没有客户",
-            "customer": "",
-            "filters": filters,
-            "metrics": metrics,
-            "total_count": 0,
-            "matched_count": 0,
-            "business_count": 0,
-            "summary": {},
-            "data": {
-                "rows": []
-            }
-        }
+    print(
+        "\n========== Query Tool =========="
+    )
 
     print(
-        "\n查询客户:",
+        "查询客户:",
         customer
     )
 
-    # ==================================================
-    # Schema信息
-    # ==================================================
-
-    money_fields = get_money_fields(
-        schema
+    print(
+        "过滤条件:",
+        filters
     )
 
-    # ==================================================
-    # 第一步：
-    # 收集所有Sheet基础信息
-    # ==================================================
+    print(
+        "指标:",
+        metrics
+    )
+
+    # ======================================================
+    # 2. 扫描所有Sheet
+    # ======================================================
 
     sheet_infos = []
 
@@ -572,76 +888,148 @@ def query_value_tool(state):
 
         sheet_name = sheet["sheet"]
 
+        columns = list(df.columns)
+
+        # --------------------------------------------------
+        # 客户字段
+        # --------------------------------------------------
+
         customer_field = find_customer_field(
             schema,
-            list(df.columns)
+            columns
         )
 
-        if not customer_field:
+        # --------------------------------------------------
+        # Filter字段
+        # --------------------------------------------------
 
-            continue
+        filter_fields = {}
 
-        customer_df = filter_customer(
+        if filters:
+
+            for key in filters:
+
+                field = find_any_field(
+                    schema,
+                    columns,
+                    key
+                )
+
+                if field:
+
+                    filter_fields[key] = field
+
+        # --------------------------------------------------
+        # Metric字段
+        # --------------------------------------------------
+
+        metric_fields = find_metric_fields(
             df,
-            customer_field,
-            customer
+            schema,
+            metrics
         )
+
+        # --------------------------------------------------
+        # 客户过滤
+        # --------------------------------------------------
+
+        if customer and not customer_field:
+
+            customer_df = df.iloc[0:0].copy()
+
+        elif customer:
+
+            customer_df = filter_customer(
+                df,
+                customer_field,
+                customer
+            )
+
+        else:
+
+            customer_df = df.copy()
+
+        info = {
+
+            "sheet":
+                sheet_name,
+
+            "df":
+                df,
+
+            "customer_field":
+                customer_field,
+
+            "customer_df":
+                customer_df,
+
+            "filter_fields":
+                filter_fields,
+
+            "metric_fields":
+                metric_fields
+        }
 
         sheet_infos.append(
-            {
-                "sheet": sheet_name,
-                "df": df,
-                "customer_df": customer_df,
-                "customer_field":
-                    customer_field
-            }
+            info
         )
 
         print(
-            f"{sheet_name} 客户匹配:",
+            f"\n[{sheet_name}]"
+        )
+
+        print(
+            "客户字段:",
+            customer_field
+        )
+
+        print(
+            "过滤字段:",
+            filter_fields
+        )
+
+        print(
+            "指标字段:",
+            metric_fields
+        )
+
+        print(
+            "客户匹配:",
             len(customer_df)
         )
 
-    # ==================================================
-    # 客户完全不存在
-    # ==================================================
+    # ======================================================
+    # 3. 判断客户是否存在
+    # ======================================================
 
-    if not sheet_infos:
+    if customer:
 
-        return {
-            "type": "query_value",
-            "status": "success",
-            "message": "没有匹配数据",
-            "customer": customer,
-            "filters": filters,
-            "metrics": metrics,
-            "total_count": 0,
-            "matched_count": 0,
-            "business_count": 0,
-            "summary": {},
-            "data": {
-                "rows": []
-            }
-        }
+        customer_exists = any(
+            len(info["customer_df"]) > 0
+            for info in sheet_infos
+        )
 
-    # ==================================================
-    # 第二步：
-    # 如果存在filters，
-    # 找到filter所在Sheet
-    # ==================================================
+        if not customer_exists:
 
-    filter_sheet_infos = []
+            return empty_result(
+                customer,
+                filters,
+                metrics,
+                "没有找到指定客户"
+            )
 
-    for info in sheet_infos:
+    # ======================================================
+    # 4. 执行Filter
+    # ======================================================
 
-        if not filters:
-            continue
+    filter_infos = []
 
-        if sheet_contains_filters(
-            info["df"],
-            schema,
-            filters
-        ):
+    if filters:
+
+        for info in sheet_infos:
+
+            if not info["filter_fields"]:
+                continue
 
             filtered_df, matched_fields = apply_filters(
                 info["customer_df"],
@@ -650,30 +1038,33 @@ def query_value_tool(state):
             )
 
             print(
-                f"{info['sheet']} 应用过滤后:",
+                f"{info['sheet']} "
+                f"过滤后:",
                 len(filtered_df)
             )
 
             if len(filtered_df) > 0:
 
-                filter_sheet_infos.append(
+                filter_infos.append(
                     {
+
                         **info,
+
                         "filtered_df":
                             filtered_df,
+
                         "matched_fields":
                             matched_fields
                     }
                 )
 
-    # ==================================================
-    # 第三步：
-    # 跨Sheet建立客户关联键
-    # ==================================================
+    # ======================================================
+    # 5. 获取客户JOIN Key
+    # ======================================================
 
     join_customer_keys = set()
 
-    for info in filter_sheet_infos:
+    for info in filter_infos:
 
         keys = get_customer_keys(
             info["filtered_df"],
@@ -684,74 +1075,55 @@ def query_value_tool(state):
             keys
         )
 
-    # 如果存在filter，
-    # 但没有任何Sheet满足filter，
-    # 直接返回空
+    # ======================================================
+    # 6. 有Filter但没有结果
+    # ======================================================
 
     if filters and not join_customer_keys:
 
-        return {
-            "type": "query_value",
-            "status": "success",
-            "message": "没有匹配数据",
-            "customer": customer,
-            "filters": filters,
-            "metrics": metrics,
-            "total_count": 0,
-            "matched_count": 0,
-            "business_count": 0,
-            "summary": {},
-            "data": {
-                "rows": []
-            }
-        }
+        return empty_result(
+            customer,
+            filters,
+            metrics
+        )
 
-    # ==================================================
-    # 第四步：
-    # 确定目标Sheet
-    # ==================================================
+    # ======================================================
+    # 7. 确定目标Sheet
+    # ======================================================
 
     target_infos = []
 
     for info in sheet_infos:
 
-        df = info["df"]
-
-        # ----------------------------------------------
-        # 没有filters：
-        #
-        # 保持原有行为：
-        # 客户所在Sheet都作为结果
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # 没有Filter
+        # --------------------------------------------------
 
         if not filters:
 
-            target_infos.append(
-                {
-                    **info,
-                    "result_df":
-                        info["customer_df"]
-                }
-            )
+            if len(info["customer_df"]) > 0:
+
+                target_infos.append(
+                    {
+
+                        **info,
+
+                        "result_df":
+                            info["customer_df"]
+                    }
+                )
 
             continue
 
-        # ----------------------------------------------
-        # 有filters：
-        #
-        # 情况A：
-        # 当前Sheet就是过滤Sheet
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # 当前Sheet就是Filter Sheet
+        # --------------------------------------------------
 
-        if sheet_contains_filters(
-            df,
-            schema,
-            filters
-        ):
+        if info["filter_fields"]:
 
-            matched_filter_info = None
+            matched = None
 
-            for filter_info in filter_sheet_infos:
+            for filter_info in filter_infos:
 
                 if (
                     filter_info["sheet"]
@@ -759,39 +1131,31 @@ def query_value_tool(state):
                     info["sheet"]
                 ):
 
-                    matched_filter_info = (
-                        filter_info
-                    )
+                    matched = filter_info
 
                     break
 
-            if matched_filter_info:
+            if matched:
 
                 target_infos.append(
                     {
+
                         **info,
+
                         "result_df":
-                            matched_filter_info[
-                                "filtered_df"
-                            ]
+                            matched["filtered_df"]
                     }
                 )
 
             continue
 
-        # ----------------------------------------------
-        # 情况B：
-        # 当前Sheet没有filter字段
+        # --------------------------------------------------
+        # 其他Sheet
         #
-        # 但是包含目标metric
-        #
-        # 通过客户关联键JOIN
-        # ----------------------------------------------
+        # 如果有指标，则通过客户Key JOIN
+        # --------------------------------------------------
 
-        if sheet_contains_metrics(
-            df,
-            metrics
-        ):
+        if info["metric_fields"]:
 
             joined_df = filter_by_customer_keys(
                 info["customer_df"],
@@ -803,7 +1167,9 @@ def query_value_tool(state):
 
                 target_infos.append(
                     {
+
                         **info,
+
                         "result_df":
                             joined_df
                     }
@@ -811,13 +1177,12 @@ def query_value_tool(state):
 
             continue
 
-        # ----------------------------------------------
-        # 情况C：
-        # 没有metrics
+        # --------------------------------------------------
+        # 没有Metric
         #
-        # 为了保持通用查询，
-        # 允许其他客户关联Sheet参与返回
-        # ----------------------------------------------
+        # 默认不强制JOIN
+        # 但如果客户相同，也可以作为关联Sheet
+        # --------------------------------------------------
 
         joined_df = filter_by_customer_keys(
             info["customer_df"],
@@ -829,68 +1194,56 @@ def query_value_tool(state):
 
             target_infos.append(
                 {
+
                     **info,
+
                     "result_df":
                         joined_df
                 }
             )
 
-    # ==================================================
-    # 第五步：
-    # 如果存在filters，
-    # 但Planner没有给metrics
+    # ======================================================
+    # 8. 没有Metrics时
     #
-    # 保留过滤Sheet本身
-    # ==================================================
+    # 必须保证Filter Sheet返回
+    # ======================================================
 
     if filters and not metrics:
 
-        target_sheet_names = {
+        existing = {
             info["sheet"]
             for info in target_infos
         }
 
-        for info in filter_sheet_infos:
+        for info in filter_infos:
 
-            if (
-                info["sheet"]
-                not in target_sheet_names
-            ):
+            if info["sheet"] not in existing:
 
                 target_infos.append(
                     {
+
                         **info,
+
                         "result_df":
                             info["filtered_df"]
                     }
                 )
 
-    # ==================================================
-    # 没有目标Sheet
-    # ==================================================
+    # ======================================================
+    # 9. 没有目标Sheet
+    # ======================================================
 
     if not target_infos:
 
-        return {
-            "type": "query_value",
-            "status": "success",
-            "message": "没有匹配数据",
-            "customer": customer,
-            "filters": filters,
-            "metrics": metrics,
-            "total_count": 0,
-            "matched_count": 0,
-            "business_count": 0,
-            "summary": {},
-            "data": {
-                "rows": []
-            }
-        }
+        return empty_result(
+            customer,
+            filters,
+            metrics
+        )
 
-    # ==================================================
-    # 第六步：
-    # 构造结果
-    # ==================================================
+    # ======================================================
+    # 10. 构造结果
+    # ======================================================
 
     all_results = []
 
@@ -898,9 +1251,7 @@ def query_value_tool(state):
 
     for info in target_infos:
 
-        result_df = info[
-            "result_df"
-        ]
+        result_df = info["result_df"]
 
         if len(result_df) == 0:
             continue
@@ -918,42 +1269,75 @@ def query_value_tool(state):
             info["sheet"]
         ] = len(rows)
 
-    # ==================================================
-    # 没有结果
-    # ==================================================
+    # ======================================================
+    # 11. 没有结果
+    # ======================================================
 
     if not all_results:
 
-        return {
-            "type": "query_value",
-            "status": "success",
-            "message": "没有匹配数据",
-            "customer": customer,
-            "filters": filters,
-            "metrics": metrics,
-            "total_count": 0,
-            "matched_count": 0,
-            "business_count": 0,
-            "summary": {},
-            "data": {
-                "rows": []
-            }
-        }
+        return empty_result(
+            customer,
+            filters,
+            metrics
+        )
 
-    # ==================================================
-    # 第七步：
-    # 金额汇总
-    #
-    # 注意：
-    # 不再把不同Sheet的缺失金额字段
-    # 强行补成0后再混合计算。
-    #
-    # 只有真正存在于结果中的金额字段才统计。
-    # ==================================================
+    # ======================================================
+    # 12. 指标汇总
+    # ======================================================
 
     summary = {}
 
-    for money_field in money_fields:
+    money_fields = get_schema_fields(
+        schema,
+        "money"
+    )
+
+    requested_metric_fields = set()
+
+    for info in target_infos:
+
+        requested_metric_fields.update(
+            info.get(
+                "metric_fields",
+                []
+            )
+        )
+
+    fields_to_sum = []
+
+    # ------------------------------------------------------
+    # Planner指定指标
+    # ------------------------------------------------------
+
+    for field in requested_metric_fields:
+
+        if field not in fields_to_sum:
+
+            fields_to_sum.append(
+                field
+            )
+
+    # ------------------------------------------------------
+    # 没指定指标
+    #
+    # 自动统计Schema金额字段
+    # ------------------------------------------------------
+
+    if not fields_to_sum:
+
+        for field in money_fields:
+
+            if field not in fields_to_sum:
+
+                fields_to_sum.append(
+                    field
+                )
+
+    # ------------------------------------------------------
+    # 汇总
+    # ------------------------------------------------------
+
+    for field in fields_to_sum:
 
         total = 0.0
 
@@ -961,12 +1345,10 @@ def query_value_tool(state):
 
         for row in all_results:
 
-            if money_field not in row:
+            if field not in row:
                 continue
 
-            value = row[
-                money_field
-            ]
+            value = row[field]
 
             numeric_value = pd.to_numeric(
                 pd.Series([value]),
@@ -986,15 +1368,19 @@ def query_value_tool(state):
         if found:
 
             summary[
-                money_field + "总额"
+                field + "总额"
             ] = round(
                 total,
                 2
             )
 
-    # ==================================================
-    # 返回
-    # ==================================================
+    # ======================================================
+    # 13. 日志
+    # ======================================================
+
+    print(
+        "\n========== Query结果 =========="
+    )
 
     print(
         "目标Sheet:",
@@ -1014,35 +1400,53 @@ def query_value_tool(state):
         len(all_results)
     )
 
+    print(
+        "汇总:",
+        summary
+    )
+
+    # ======================================================
+    # 14. 返回
+    # ======================================================
+
     return {
-        "type": "query_value",
-        "status": "success",
-        "message": "查询完成",
 
-        "customer": customer,
+        "type":
+            "query_value",
 
-        "filters": filters,
+        "status":
+            "success",
 
-        "metrics": metrics,
+        "message":
+            "查询完成",
 
-        "total_count": len(
-            all_results
-        ),
+        "customer":
+            customer,
 
-        "matched_count": len(
-            all_results
-        ),
+        "filters":
+            filters,
 
-        "business_count": len(
-            all_results
-        ),
+        "metrics":
+            metrics,
 
-        "sheet_counts": sheet_counts,
+        "total_count":
+            len(all_results),
 
-        "summary": summary,
+        "matched_count":
+            len(all_results),
 
-        "data": {
-            "rows":
-                all_results[:100]
-        }
+        "business_count":
+            len(all_results),
+
+        "sheet_counts":
+            sheet_counts,
+
+        "summary":
+            summary,
+
+        "data":
+            {
+                "rows":
+                    all_results[:100]
+            }
     }
