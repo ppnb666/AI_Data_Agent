@@ -34,10 +34,7 @@ from tools import tool_registry
 
 class TaskPlanner:
 
-    def __init__(
-        self,
-        llm_client
-    ):
+    def __init__(self, llm_client):
 
         self.llm = llm_client
 
@@ -45,6 +42,147 @@ class TaskPlanner:
             __name__
         )
 
+    # ==================================================
+    # JSON解析
+    # ==================================================
+
+    def parse_json_response(self, response):
+        """
+        从LLM返回内容中提取JSON
+
+        支持:
+
+        1. 纯JSON
+        2. ```json ... ```
+        3. 前后带说明文字
+        4. JSON数组
+        5. JSON对象
+        """
+
+        if response is None:
+
+            raise ValueError(
+                "LLM返回为空"
+            )
+
+        response = str(response).strip()
+
+        if not response:
+
+            raise ValueError(
+                "LLM返回为空字符串"
+            )
+
+        # ---------------------------------------------
+        # ① 直接解析
+        # ---------------------------------------------
+
+        try:
+
+            return json.loads(
+                response
+            )
+
+        except json.JSONDecodeError:
+
+            pass
+
+        # ---------------------------------------------
+        # ② 去除Markdown代码块
+        # ---------------------------------------------
+
+        cleaned = response
+
+        cleaned = cleaned.replace(
+            "```json",
+            ""
+        )
+
+        cleaned = cleaned.replace(
+            "```JSON",
+            ""
+        )
+
+        cleaned = cleaned.replace(
+            "```",
+            ""
+        )
+
+        cleaned = cleaned.strip()
+
+        try:
+
+            return json.loads(
+                cleaned
+            )
+
+        except json.JSONDecodeError:
+
+            pass
+
+        # ---------------------------------------------
+        # ③ 提取JSON数组
+        # ---------------------------------------------
+
+        start = cleaned.find("[")
+
+        end = cleaned.rfind("]")
+
+        if (
+            start != -1
+            and end != -1
+            and end > start
+        ):
+
+            json_text = cleaned[
+                start:end + 1
+            ]
+
+            try:
+
+                return json.loads(
+                    json_text
+                )
+
+            except json.JSONDecodeError:
+
+                pass
+
+        # ---------------------------------------------
+        # ④ 提取JSON对象
+        # ---------------------------------------------
+
+        start = cleaned.find("{")
+
+        end = cleaned.rfind("}")
+
+        if (
+            start != -1
+            and end != -1
+            and end > start
+        ):
+
+            json_text = cleaned[
+                start:end + 1
+            ]
+
+            try:
+
+                return json.loads(
+                    json_text
+                )
+
+            except json.JSONDecodeError:
+
+                pass
+
+        raise ValueError(
+            "无法从LLM返回内容中解析JSON"
+        )
+
+    # ==================================================
+    # 创建任务计划
+    # ==================================================
 
     def create_plan(
         self,
@@ -53,17 +191,14 @@ class TaskPlanner:
 
         tools = tool_registry.list_tools()
 
-
         prompt = f"""
 
 你是企业级AI数据分析Agent规划器。
-
 
 你的任务:
 
 根据用户自然语言需求，
 生成执行计划。
-
 
 ======================
 
@@ -73,9 +208,7 @@ class TaskPlanner:
 
 ======================
 
-
 【任务分类规则】
-
 
 一、普通查询
 
@@ -88,11 +221,9 @@ class TaskPlanner:
 余额
 金额
 
-
 选择:
 
 query_value
-
 
 返回:
 
@@ -103,12 +234,9 @@ query_value
 "filters":{{}}
 }}
 
-
 ======================
 
-
 二、字段比较 ⭐
-
 
 用户出现:
 
@@ -142,18 +270,13 @@ query_value
 
 不超过
 
-
 选择:
 
 compare_rows
 
-
-
 ======================
 
-
 【比较运算符规则】
-
 
 相等:
 
@@ -163,14 +286,11 @@ compare_rows
 相同
 一样
 
-
 operator:
 
 "=="
 
-
 ----------------------
-
 
 不相等:
 
@@ -180,14 +300,11 @@ operator:
 差异
 有差别
 
-
 operator:
 
 "!="
 
-
 ----------------------
-
 
 大于:
 
@@ -195,63 +312,48 @@ operator:
 超过
 高于
 
-
 operator:
 
 ">"
 
-
 ----------------------
-
 
 小于:
 
 小于
 低于
 
-
 operator:
 
 "<"
 
-
 ----------------------
-
 
 大于等于:
 
 不少于
 至少
 
-
 operator:
 
 ">="
 
-
 ----------------------
-
 
 小于等于:
 
 不超过
 最多
 
-
 operator:
 
 "<="
 
-
-
 ======================
-
 
 【compare格式】
 
-
 必须返回:
-
 
 "compare":
 {{
@@ -260,18 +362,13 @@ operator:
     "operator":"运算符"
 }}
 
-
-
 ======================
 
-
 示例:
-
 
 用户:
 
 查询A公司本期贷方和贷方累计是否相等
-
 
 返回:
 
@@ -297,13 +394,9 @@ operator:
 }}
 ]
 
-
-
-
 用户:
 
 查询A公司本期贷方和贷方累计不相等的数据
-
 
 返回:
 
@@ -329,13 +422,9 @@ operator:
 }}
 ]
 
-
-
-
 用户:
 
 查询A公司期末余额大于100万的数据
-
 
 返回:
 
@@ -361,13 +450,9 @@ operator:
 }}
 ]
 
-
-
 ======================
 
-
 三、汇总统计
-
 
 用户出现:
 
@@ -379,18 +464,13 @@ operator:
 
 汇总
 
-
 选择:
 
 aggregate_value
 
-
-
 ======================
 
-
 四、排序排名
-
 
 用户出现:
 
@@ -402,18 +482,13 @@ aggregate_value
 
 TOP
 
-
 选择:
 
 rank_rows
 
-
-
 ======================
 
-
 五、异常检测
-
 
 用户出现:
 
@@ -423,23 +498,17 @@ rank_rows
 
 异常数据
 
-
 选择:
 
 detect_anomaly
 
-
-
 ======================
 
-
 【字段提取规则】
-
 
 客户:
 
 必须完整保留。
-
 
 例如:
 
@@ -447,30 +516,22 @@ detect_anomaly
 
 保利长大工程有限公司
 
-
 错误:
 
 保利长大
-
-
 
 业务条件:
 
 必须放入filters。
 
-
 例如:
-
 
 用户:
 
 业务类型（新）:
 公路建设期产品运维(JSYW)
 
-
-
 返回:
-
 
 "filters":
 
@@ -479,22 +540,15 @@ detect_anomaly
 "公路建设期产品运维(JSYW)"
 }}
 
-
-
 ======================
 
-
 【输出格式】
-
 
 只能返回JSON数组。
 
 禁止解释。
 
-
-
 格式:
-
 
 [
 {{
@@ -516,20 +570,16 @@ detect_anomaly
 }}
 ]
 
-
-
 用户需求:
 
 {user_query}
 
 """
 
-
         messages = [
 
             {
-                "role":"system",
-
+                "role": "system",
                 "content":
                 """
 你是企业数据Agent规划器。
@@ -538,13 +588,11 @@ detect_anomaly
             },
 
             {
-                "role":"user",
-
-                "content":prompt
+                "role": "user",
+                "content": prompt
             }
 
         ]
-
 
         try:
 
@@ -552,43 +600,51 @@ detect_anomaly
                 messages
             )
 
-
             print(
                 "\n===== DeepSeek Planner原始返回 ====="
             )
 
             print(response)
 
+            # ==========================================
+            # JSON解析
+            # ==========================================
 
-
-            response = response.strip()
-
-
-
-            if response.startswith("```"):
-
-                response = (
-                    response
-                    .replace("```json","")
-                    .replace("```","")
-                    .strip()
-                )
-
-
-            plan = json.loads(
+            plan = self.parse_json_response(
                 response
             )
 
+            # ==========================================
+            # 校验JSON类型
+            # ==========================================
 
-            valid=[]
+            if not isinstance(
+                plan,
+                list
+            ):
 
+                raise ValueError(
+                    "Planner返回的不是JSON数组"
+                )
+
+            valid = []
 
             for task in plan:
+
+                if not isinstance(
+                    task,
+                    dict
+                ):
+
+                    continue
 
                 tool = task.get(
                     "tool"
                 )
 
+                # --------------------------------------
+                # 工具存在性检查
+                # --------------------------------------
 
                 if tool not in tools:
 
@@ -599,60 +655,66 @@ detect_anomaly
 
                     continue
 
-
-
                 valid.append(
 
                     {
+                        "tool":
+                        tool,
 
-                    "tool":tool,
+                        "reason":
+                        task.get(
+                            "reason",
+                            ""
+                        ),
 
-                    "reason":
-                    task.get(
-                        "reason",
-                        ""
-                    ),
+                        "customer":
+                        task.get(
+                            "customer",
+                            ""
+                        ),
 
-                    "customer":
-                    task.get(
-                        "customer",
-                        ""
-                    ),
+                        "metrics":
+                        task.get(
+                            "metrics",
+                            []
+                        ),
 
-                    "metrics":
-                    task.get(
-                        "metrics",
-                        []
-                    ),
+                        "filters":
+                        task.get(
+                            "filters",
+                            {}
+                        ),
 
-                    "filters":
-                    task.get(
-                        "filters",
-                        {}
-                    ),
+                        "compare":
+                        task.get(
+                            "compare",
+                            {}
+                        ),
 
-                    "compare":
-                    task.get(
-                        "compare",
-                        {}
-                    ),
+                        "condition":
+                        task.get(
+                            "condition",
+                            {}
+                        ),
 
-                    "condition":
-                    task.get(
-                        "condition",
-                        {}
-                    ),
-
-                    "output":
-                    task.get(
-                        "output",
-                        ""
-                    )
-
+                        "output":
+                        task.get(
+                            "output",
+                            ""
+                        )
                     }
 
                 )
 
+            # ==========================================
+            # 如果LLM返回了JSON，但是没有有效工具
+            # ==========================================
+
+            if not valid:
+
+                raise ValueError(
+                    "Planner没有生成有效任务"
+                )
 
             print(
                 "\n===== V7 Planner计划 ====="
@@ -660,36 +722,31 @@ detect_anomaly
 
             print(valid)
 
-
             return valid
 
-
-
         except Exception as e:
-
 
             self.logger.error(
                 f"Planner失败:{e}"
             )
-
 
             print(
                 "Planner失败:",
                 e
             )
 
-
             return self.fallback_plan(
                 user_query
             )
 
-
+    # ==================================================
+    # Fallback
+    # ==================================================
 
     def fallback_plan(
         self,
         query
     ):
-
 
         compare_keywords = [
 
@@ -710,12 +767,14 @@ detect_anomaly
 
         ]
 
-
         if any(
             k in query
             for k in compare_keywords
         ):
 
+            # =========================================
+            # 相等
+            # =========================================
 
             if any(
                 k in query
@@ -727,8 +786,11 @@ detect_anomaly
                 ]
             ):
 
-                operator="=="
+                operator = "=="
 
+            # =========================================
+            # 大于
+            # =========================================
 
             elif any(
                 k in query
@@ -739,8 +801,11 @@ detect_anomaly
                 ]
             ):
 
-                operator=">"
+                operator = ">"
 
+            # =========================================
+            # 小于
+            # =========================================
 
             elif any(
                 k in query
@@ -750,45 +815,42 @@ detect_anomaly
                 ]
             ):
 
-                operator="<"
+                operator = "<"
 
+            # =========================================
+            # 默认不相等
+            # =========================================
 
             else:
 
-                operator="!="
-
-
+                operator = "!="
 
             return [
 
                 {
+                    "tool":
+                    "compare_rows",
 
-                "tool":
-                "compare_rows",
+                    "reason":
+                    "关键词判断比较任务",
 
-                "reason":
-                "关键词判断比较任务",
-
-                "compare":
-                {
-                    "operator":operator
-                }
-
+                    "compare":
+                    {
+                        "operator":
+                        operator
+                    }
                 }
 
             ]
 
-
         return [
 
             {
+                "tool":
+                "query_value",
 
-            "tool":
-            "query_value",
-
-            "reason":
-            "默认查询"
-
+                "reason":
+                "默认查询"
             }
 
         ]
