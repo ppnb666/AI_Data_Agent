@@ -13,6 +13,7 @@ from config import (
 )
 
 from utils.trace import AgentTrace
+# state.py
 
 class AgentState:
 
@@ -24,6 +25,9 @@ class AgentState:
 
         self.user_query = ""
         self.query_result = {}
+
+        self.data_quality_report = {}  # 数据质量报告
+        self.clean_suggestions = {}  # 清洗建议
 
 
         # Excel路径
@@ -120,6 +124,8 @@ class AgentState:
         # Agent执行轨迹
 
         self.trace = AgentTrace()
+
+        self.mapping = {}
 
 
 

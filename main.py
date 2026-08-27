@@ -342,66 +342,66 @@ def print_compare_rows_result(result):
 # =========================================================
 
 def print_result(result):
-
     if not result:
-
-        print(
-            "\n❌ Agent没有返回结果"
-        )
-
+        print("\n❌ Agent没有返回结果")
         return
 
-    query_result = result.get(
-        "query_result"
-    )
-
+    query_result = result.get("query_result")
     if not query_result:
-
-        print(
-            "\n❌ 没有查询结果"
-        )
-
+        print("\n❌ 没有查询结果")
         return
 
-    result_type = query_result.get(
-        "type"
-    )
-
-    # -----------------------------------------------------
-    # query_value
-    # -----------------------------------------------------
+    result_type = query_result.get("type")
 
     if result_type == "query_value":
-
-        print_query_value_result(
-            query_result
-        )
-
-    # -----------------------------------------------------
-    # compare_rows
-    # -----------------------------------------------------
-
+        print_query_value_result(query_result)
     elif result_type == "compare_rows":
-
-        print_compare_rows_result(
-            query_result
-        )
-
-    # -----------------------------------------------------
-    # 其他工具
-    # -----------------------------------------------------
-
+        print_compare_rows_result(query_result)
+    elif result_type == "rank_rows":
+        print_rank_rows_result(query_result)
     else:
+        print("\n========== 查询结果 ==========")
+        print(query_result)
 
-        print(
-            "\n========== 查询结果 =========="
-        )
+def print_rank_rows_result(result):
+    """输出排名结果"""
+    print("\n========== 排名结果 ==========")
+    status = result.get("status", "unknown")
+    if status != "success":
+        print(f"❌ 排名失败：{result.get('message', '未知错误')}")
+        return
 
-        print(
-            query_result
-        )
+    metric = result.get("metric", "未知指标")
+    order = result.get("order", "desc")
+    total = result.get("total_count", 0)
+    limit = result.get("limit", 0)
+    print(f"📊 按 {metric} 排名（{'降序' if order == 'desc' else '升序'}），共 {total} 条记录，显示前 {limit} 条")
 
+    rows = result.get("data", {}).get("rows", [])
+    if not rows:
+        print("📋 没有匹配的数据")
+        return
 
+    print("\n排名 | 客户名称 | 指标值 | 来源Sheet")
+    print("-----|----------|--------|----------")
+    for row in rows:
+        rank = row.get("排名", "")
+        # 尝试提取客户名称
+        customer_name = ""
+        for key in ["客商名称", "客户名称", "客商", "客户"]:
+            if key in row:
+                customer_name = row[key]
+                break
+        if not customer_name:
+            # 如果没找到，取第一个字符串类型的值（跳过排名、来源Sheet、指标等）
+            for key, value in row.items():
+                if isinstance(value, str) and key not in ["来源Sheet", "排名", metric]:
+                    customer_name = value
+                    break
+        metric_value = row.get(metric, "")
+        sheet = row.get("来源Sheet", "")
+        # 截断显示，避免过长
+        print(f"{rank:^3} | {str(customer_name)[:20]:<20} | {metric_value:>12} | {sheet}")
 # =========================================================
 # Excel文件选择
 # =========================================================
@@ -574,7 +574,7 @@ def main():
     result = agent.run(
         data_path,
         user_query=query,
-        with_ai=False
+        with_ai=True
     )
 
     # -----------------------------------------------------

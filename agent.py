@@ -3,7 +3,7 @@ AI Data Agent
 
 LLM Planner + Schema Agent + Tool Registry
 """
-
+from typing import Optional, Dict
 from state import AgentState
 
 from utils.logger import get_logger
@@ -139,6 +139,70 @@ class DataAgent:
         # ==================================================
         # 数据画像
         # ==================================================
+
+        def prepare_context(self, state):
+            self.logger.info(f"读取数据文件:{state.file_path}")
+
+            from utils.excel_loader import load_excel
+
+            sheets = load_excel(state.file_path)
+            state.sheet_profiles = sheets
+
+            print("\n📂 Excel Sheet数量:", len(sheets))
+
+            # ==================================================
+            # Schema理解
+            # ==================================================
+            schema = self.schema_agent.analyze(sheets)
+            state.workbook_schema = schema
+            print("\n📚 Excel结构理解:")
+            print(schema)
+
+            # ==================================================
+            # 选择Sheet
+            # ==================================================
+            selected = self.data_profiler.select_sheet(sheets, state.user_query)
+            if not selected:
+                selected = sheets[0]
+            state.df = selected["df"]
+            state.sheet_name = selected["sheet"]
+
+            self.logger.info(f"当前Sheet:{state.sheet_name}")
+
+            # ==================================================
+            # 数据理解（DataProfiler分析）
+            # ==================================================
+            data_schema = self.data_profiler.analyze(state.df)
+            state.schema = data_schema
+
+            print("\n📚 AI数据理解:")
+            print(data_schema)
+
+            # ==================================================
+            # 【新增】获取清洗建议并执行
+            # ==================================================
+            quality_report = data_schema.get("quality_report", {})
+            clean_suggestions = data_schema.get("clean_suggestions", {})
+
+            if quality_report.get("overall_score", 100) < 80:
+                print(f"\n🧹 数据质量评分: {quality_report.get('overall_score')}，自动执行清洗...")
+                state.df = DataProfilerAgent.apply_clean_suggestions(state.df, clean_suggestions)
+                print(f"   清洗后数据: {len(state.df)} 行")
+            else:
+                print(f"\n✅ 数据质量评分: {quality_report.get('overall_score')}，质量良好，无需清洗")
+
+            # ==================================================
+            # 数据画像
+            # ==================================================
+            state.data_profile = profile_dataframe(state.df)
+
+            # ==================================================
+            # 自动识别字段
+            # ==================================================
+            columns = detect_columns(state.df)
+            state.sales_col = columns.get("sales_column")
+            state.product_col = columns.get("product_column")
+            state.date_col = columns.get("date_column")
 
         state.data_profile = profile_dataframe(
             state.df
@@ -574,7 +638,9 @@ class DataAgent:
 
                     "query_value",
 
-                    "compare_rows"
+                    "compare_rows",
+                    
+                    "rank_rows"
 
                 ]:
 
@@ -645,95 +711,131 @@ class DataAgent:
     # AI分析
     # ==================================================
 
-    def get_ai_insight(
-            self
-    ):
-
-        result = self.analysis_result.get(
-            "query_result",
-            {}
-        )
-
+    def get_ai_insight(self):
+        """根据查询结果生成AI分析报告"""
+        result = self.analysis_result.get("query_result", {})
         if not result:
-
             return "没有查询结果"
 
-        rows = (
-            result
-            .get(
-                "data",
-                {}
-            )
-            .get(
-                "rows",
-                []
-            )
-        )
+        result_type = result.get("type")
 
-        if not rows:
+        # ==========================================================
+        # 1. 排名结果 → 发展前景分析
+        # ==========================================================
+        if result_type == "rank_rows":
+            rows = result.get("data", {}).get("rows", [])
+            if not rows:
+                return "没有排名数据"
 
-            return "未发现异常数据"
+            metric = result.get("metric", "指标")
+            # 构建排名摘要
+            summary = f"按 {metric} 排名前 {len(rows)} 的客户：\n"
+            for i, row in enumerate(rows, 1):
+                # 提取客户名称
+                name = (row.get("客商名称") or row.get("客户名称") or
+                        row.get("客商") or row.get("客户") or f"客户{i}")
+                value = row.get(metric, 0)
+                summary += f"{i}. {name}：{metric} = {value:,.2f}\n"
 
-        prompt = f"""
+            # 统计信息
+            total = result.get("total_count", 0)
+            summary += f"\n共 {total} 个客户参与排名。"
 
-你是一名企业财务分析专家。
+            prompt = f"""
+    你是一名企业财务分析师。请根据以下排名数据，分析哪个公司发展前景最好，并给出理由。
 
-以下是不符合条件的数据：
+    数据：
+    {summary}
 
-{rows}
+    请输出（请聚焦于发展前景分析，不要过度解读数据格式问题）：
+    1. 发展前景最好的客户是哪个？为什么？
+    2. 该客户的核心优势是什么？（如收入规模、客户稳定性、业务增长等）
+    3. 前3名客户的简要对比分析
+    4. 潜在的关注点或建议
+    """
+            return self.llm.chat([
+                {"role": "system", "content": "你是一名企业财务分析师，擅长从财务数据中洞察企业发展前景。"},
+                {"role": "user", "content": prompt}
+            ])
 
-请输出：
+        # ==========================================================
+        # 2. 比较结果 → 异常分析
+        # ==========================================================
+        if result_type == "compare_rows":
+            rows = result.get("data", {}).get("rows", [])
+            if not rows:
+                return "未发现异常数据"
 
-1. 数据异常分析
-2. 潜在风险
-3. 处理建议
+            prompt = f"""
+    你是一名企业财务分析专家。
 
-要求：
+    以下是不符合条件的数据：
+    {rows}
 
-只能根据数据分析。
-不要编造。
-"""
+    请输出：
+    1. 数据异常分析
+    2. 潜在风险
+    3. 处理建议
 
-        return self.llm.chat(
+    要求：只能根据数据分析，不要编造。
+    """
+            return self.llm.chat([
+                {"role": "system", "content": "企业财务分析助手"},
+                {"role": "user", "content": prompt}
+            ])
 
-            [
+        # ==========================================================
+        # 3. 查询结果 → 数据摘要
+        # ==========================================================
+        if result_type == "query_value":
+            rows = result.get("data", {}).get("rows", [])
+            if not rows:
+                return "没有查询到数据"
 
-                {
-                    "role":
-                    "system",
+            # 简单摘要
+            total_count = result.get("total_count", 0)
+            summary = f"共查询到 {total_count} 条记录。\n"
+            # 显示前5条
+            for i, row in enumerate(rows[:5], 1):
+                summary += f"第{i}条: {row}\n"
+            if len(rows) > 5:
+                summary += f"... 还有 {len(rows) - 5} 条"
 
-                    "content":
-                    "企业财务分析助手"
-                },
+            prompt = f"""
+    请根据以下查询结果，生成简洁的数据摘要：
+    {summary}
 
-                {
-                    "role":
-                    "user",
+    输出要求：
+    1. 数据概览
+    2. 关键发现
+    3. 建议
+    """
+            return self.llm.chat([
+                {"role": "system", "content": "数据摘要助手"},
+                {"role": "user", "content": prompt}
+            ])
 
-                    "content":
-                    prompt
-                }
-
-            ]
-
-        )
-
+        # ==========================================================
+        # 4. 未知类型
+        # ==========================================================
+        return "暂不支持该类型结果的AI分析"
     # ==================================================
     # Agent入口
     # ==================================================
 
+    # agent.py 中修改
     def run(
             self,
             file_path,
             user_query="",
-            with_ai=True
+            with_ai=True,
+            mapping: Optional[Dict[str, str]] = None  # 新增
     ):
-
         state = AgentState()
-
         state.file_path = file_path
-
         state.user_query = user_query
+        state.mapping = mapping or {}  # 新增字段（需在state.py中定义）
+        # ... 其余不变
 
         # ==================================================
         # 1. 先读取Excel
