@@ -3,8 +3,10 @@
 负责调用 DeepSeek API
 """
 
+import json
 import os
-from typing import Optional, Dict, Any
+import re
+from typing import Optional, Dict, Any, List
 
 from dotenv import load_dotenv
 
@@ -117,84 +119,38 @@ class LLMClient:
             return ""
 
 
-
-
-
-    def summarize_analysis(
+    def chat_json(
             self,
-            analysis_data:Dict[str,Any]
-    ) -> str:
+            messages: list
+    ) -> Optional[dict]:
+        """
+        调用 LLM 并解析 JSON 输出。
 
+        自动去除 markdown 代码块标记，提取第一个 {...} 到最后一个 }。
+        解析失败返回 None（调用方负责降级到关键词路径）。
+        """
+        text = self.chat(messages)
 
-        prompt=f"""
+        if not text:
+            return None
 
-你是企业数据分析专家。
+        text = text.strip()
 
+        # 去除 markdown 代码块
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
 
-请根据以下分析结果生成业务分析。
+        start = text.find("{")
 
+        end = text.rfind("}")
 
-数据:
+        if start == -1 or end == -1 or end <= start:
+            return None
 
-记录数量:
-{analysis_data.get("total_count")}
-
-
-清洗数量:
-{analysis_data.get("clean_count")}
-
-
-最高销售:
-{analysis_data.get("top_sales")}
-
-
-异常数量:
-{analysis_data.get("outlier_count")}
-
-
-字段:
-{analysis_data.get("columns")}
-
-
-
-请输出:
-
-1. 数据质量评价
-
-2. 业务分析
-
-3. 改进建议
-
-
-要求:
-中文输出
-200字以内
-
-"""
-
-
-        messages=[
-
-
-            {
-                "role":"system",
-                "content":
-                "你是一名专业数据分析师"
-            },
-
-
-            {
-                "role":"user",
-                "content":prompt
-            }
-
-
-        ]
-
-
-        return self.chat(messages)
-
-
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            return None
 
 
 # ==========================
@@ -221,18 +177,6 @@ def get_client(
 
         model=model
 
-    )
-
-
-
-
-def quick_summary(
-        analysis_data
-):
-
-
-    return default_client.summarize_analysis(
-        analysis_data
     )
 
 

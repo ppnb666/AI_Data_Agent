@@ -12,7 +12,8 @@ from config import DATA_PATH
 
 from tools import tool_registry
 
-from utils.data_parser import detect_columns
+from tools.field_resolver import resolve_field
+
 from utils.data_profiler import profile_dataframe
 
 from llm.client import (
@@ -75,9 +76,9 @@ class DataAgent:
             f"读取数据文件:{state.file_path}"
         )
 
-        from utils.excel_loader import load_excel
+        from utils.data_loader import load_file
 
-        sheets = load_excel(
+        sheets = load_file(
             state.file_path
         )
 
@@ -93,7 +94,17 @@ class DataAgent:
         # ==================================================
 
         schema = self.schema_agent.analyze(
-            sheets
+            sheets,
+            user_query=getattr(
+                state,
+                "user_query",
+                ""
+            ),
+            mapping=getattr(
+                state,
+                "mapping",
+                {}
+            )
         )
 
         state.workbook_schema = schema
@@ -110,7 +121,8 @@ class DataAgent:
 
         selected = self.data_profiler.select_sheet(
             sheets,
-            state.user_query
+            state.user_query,
+            schema=schema
         )
 
         if not selected:
@@ -173,24 +185,93 @@ class DataAgent:
         )
 
         # ==================================================
-        # 自动识别字段
+        # 构造 Schema 摘要（供 Planner 选择真实存在的指标）
         # ==================================================
 
-        columns = detect_columns(
-            state.df
+        state.schema_summary = self.build_schema_summary(
+            state
         )
 
-        state.sales_col = columns.get(
-            "sales_column"
+    # ==================================================
+    # 构造 Schema 摘要（Planner 动态指标的唯一输入）
+    # ==================================================
+
+    def build_schema_summary(self, state):
+        """
+        从 workbook_schema 的 roles（唯一事实来源）构造：
+        {
+            "sheets": [...],
+            "metric_fields": ["期末余额", ...],   # amount + number
+            "dimension_fields": {"customer": [...], ...},
+            "samples": {"列名": ["样本1", "样本2"]}
+        }
+        """
+        schema = getattr(
+            state,
+            "workbook_schema",
+            {}
         )
 
-        state.product_col = columns.get(
-            "product_column"
+        if not schema:
+            return None
+
+        roles = schema.get(
+            "roles",
+            {}
         )
 
-        state.date_col = columns.get(
-            "date_column"
+        metric_fields = list(
+            roles.get("amount", [])
+        ) + list(
+            roles.get("number", [])
         )
+
+        # 指标字段去 Sheet 前缀 + 去重
+        metric_fields = list(
+            dict.fromkeys(
+                str(f).split(".", 1)[-1]
+                for f in metric_fields
+            )
+        )
+
+        dimension_roles = [
+            "customer", "business", "product", "department",
+            "project", "region", "person", "category",
+        ]
+
+        dimension_fields = {}
+
+        for role in dimension_roles:
+
+            fields = [
+                str(f).split(".", 1)[-1]
+                for f in roles.get(role, [])
+            ]
+
+            if fields:
+                dimension_fields[role] = fields
+
+        # 每列 2 个样本
+        samples = {}
+
+        for field, info in schema.get(
+            "fields",
+            {}
+        ).items():
+
+            col = info.get("column", "")
+
+            if col:
+                samples[col] = (
+                    info.get("sample_values", [])[:2]
+                )
+
+        return {
+            "sheets": schema.get("sheets", []),
+            "metric_fields": metric_fields,
+            "dimension_fields": dimension_fields,
+            "samples": samples,
+        }
 
     # ==================================================
     # 从Excel中自动寻找客户
@@ -232,51 +313,16 @@ class DataAgent:
             return ""
 
         # ==================================================
-        # 优先使用Schema中的customer字段
+        # 遍历所有Sheet，通过 field_resolver 找客户字段
+        # （mapping → schema.roles → 关键词兜底，含 person
+        # 姓名列兜底，任意行业都能命中）
         # ==================================================
-
-        customer_fields = []
 
         schema = getattr(
             state,
             "workbook_schema",
             {}
         )
-
-        if isinstance(
-            schema,
-            dict
-        ):
-
-            entities = schema.get(
-                "entities",
-                {}
-            )
-
-            customer_fields = entities.get(
-                "customer",
-                []
-            )
-
-        # ==================================================
-        # 如果Schema没有客户字段
-        # 使用常见字段名
-        # ==================================================
-
-        if not customer_fields:
-
-            customer_fields = [
-
-                "客商名称",
-                "集团内/外客商",
-                "客户名称",
-                "客户"
-
-            ]
-
-        # ==================================================
-        # 遍历所有Sheet
-        # ==================================================
 
         sheets = getattr(
             state,
@@ -294,47 +340,46 @@ class DataAgent:
 
                 continue
 
-            for field in customer_fields:
+            columns = list(
+                df.columns
+            )
 
-                # ------------------------------------------
-                # Schema字段可能是：
-                #
-                # Sheet1.客商名称
-                #
-                # 这里只取最后的字段名
-                # ------------------------------------------
+            field = resolve_field(
+                state,
+                schema,
+                columns,
+                "customer"
+            )
 
-                column = str(
-                    field
-                ).split(
-                    "."
-                )[-1]
+            if not field:
 
-                if column not in df.columns:
+                continue
+
+            if field not in df.columns:
+
+                continue
+
+            values = (
+                df[field]
+                .dropna()
+                .astype(str)
+                .str.strip()
+                .unique()
+            )
+
+            # ==========================================
+            # 精确匹配
+            # ==========================================
+
+            for value in values:
+
+                if not value:
 
                     continue
 
-                values = (
-                    df[column]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                    .unique()
-                )
+                if value in query:
 
-                # ==========================================
-                # 精确匹配
-                # ==========================================
-
-                for value in values:
-
-                    if not value:
-
-                        continue
-
-                    if value in query:
-
-                        return value
+                    return value
 
         return ""
 
@@ -610,8 +655,12 @@ class DataAgent:
                     "query_value",
 
                     "compare_rows",
-                    
-                    "rank_rows"
+
+                    "rank_rows",
+
+                    "aggregate_value",
+
+                    "detect_anomaly",
 
                 ]:
 
@@ -682,16 +731,45 @@ class DataAgent:
     # AI分析
     # ==================================================
 
-    def get_ai_insight(self):
-        """根据查询结果生成AI分析报告"""
+    def get_ai_insight(self, state=None):
+        """根据查询结果生成AI分析报告（通用化，不绑定任何行业）"""
         result = self.analysis_result.get("query_result", {})
         if not result:
             return "没有查询结果"
 
         result_type = result.get("type")
 
+        # 排名分组字段：优先取 schema 的 customer 角色列，
+        # 其次 business/product/department/project，最后"分组"
+        dimension_cols = ["分组"]
+        if state is not None:
+            schema = getattr(state, "workbook_schema", {}) or {}
+            roles = schema.get("roles", {}) or {}
+            for role in (
+                "customer", "business", "product",
+                "department", "project",
+            ):
+                for field in roles.get(role, []):
+                    col = str(field).split(".", 1)[-1]
+                    if col not in dimension_cols:
+                        dimension_cols.append(col)
+
+        def _pick_name(row, i):
+            """从结果行中提取分组/实体名称"""
+            for col in dimension_cols:
+                value = row.get(col)
+                if value not in (None, ""):
+                    return str(value)
+            # 未知维度：取第一个非指标键
+            for key, value in row.items():
+                if key in ("排名", "来源Sheet", "指标"):
+                    continue
+                if not isinstance(value, (int, float)):
+                    return str(value)
+            return f"第{i}名"
+
         # ==========================================================
-        # 1. 排名结果 → 发展前景分析
+        # 1. 排名结果 → 表现分析
         # ==========================================================
         if result_type == "rank_rows":
             rows = result.get("data", {}).get("rows", [])
@@ -700,37 +778,35 @@ class DataAgent:
 
             metric = result.get("metric", "指标")
             # 构建排名摘要
-            summary = f"按 {metric} 排名前 {len(rows)} 的客户：\n"
+            summary = f"按 {metric} 排名前 {len(rows)} 的数据主体：\n"
             for i, row in enumerate(rows, 1):
-                # 提取客户名称
-                name = (row.get("客商名称") or row.get("客户名称") or
-                        row.get("客商") or row.get("客户") or f"客户{i}")
+                name = _pick_name(row, i)
                 value = row.get(metric, 0)
                 summary += f"{i}. {name}：{metric} = {value:,.2f}\n"
 
             # 统计信息
             total = result.get("total_count", 0)
-            summary += f"\n共 {total} 个客户参与排名。"
+            summary += f"\n共 {total} 个数据主体参与排名。"
 
             prompt = f"""
-    你是一名企业财务分析师。请根据以下排名数据，分析哪个公司发展前景最好，并给出理由。
+    你是一名资深数据分析师。请根据以下排名数据，分析表现最好的数据主体，并给出理由。
 
     数据：
     {summary}
 
-    请输出（请聚焦于发展前景分析，不要过度解读数据格式问题）：
-    1. 发展前景最好的客户是哪个？为什么？
-    2. 该客户的核心优势是什么？（如收入规模、客户稳定性、业务增长等）
-    3. 前3名客户的简要对比分析
+    请输出（请聚焦于数据分析，不要过度解读数据格式问题）：
+    1. 表现最好的数据主体是哪个？为什么？
+    2. 该主体的核心优势是什么？
+    3. 前3名主体的简要对比分析
     4. 潜在的关注点或建议
     """
             return self.llm.chat([
-                {"role": "system", "content": "你是一名企业财务分析师，擅长从财务数据中洞察企业发展前景。"},
+                {"role": "system", "content": "你是一名资深数据分析师，擅长从数据中洞察规律与差异。"},
                 {"role": "user", "content": prompt}
             ])
 
         # ==========================================================
-        # 2. 比较结果 → 异常分析
+        # 2. 比较结果 → 差异分析
         # ==========================================================
         if result_type == "compare_rows":
             rows = result.get("data", {}).get("rows", [])
@@ -738,20 +814,20 @@ class DataAgent:
                 return "未发现异常数据"
 
             prompt = f"""
-    你是一名企业财务分析专家。
+    你是一名资深数据分析师。
 
     以下是不符合条件的数据：
     {rows}
 
     请输出：
-    1. 数据异常分析
+    1. 数据差异分析
     2. 潜在风险
     3. 处理建议
 
     要求：只能根据数据分析，不要编造。
     """
             return self.llm.chat([
-                {"role": "system", "content": "企业财务分析助手"},
+                {"role": "system", "content": "资深数据分析助手"},
                 {"role": "user", "content": prompt}
             ])
 
@@ -824,7 +900,12 @@ class DataAgent:
         # ==================================================
 
         state.plan = self.planner.create_plan(
-            user_query
+            user_query,
+            schema_summary=getattr(
+                state,
+                "schema_summary",
+                None
+            )
         )
 
         print(
@@ -866,7 +947,7 @@ class DataAgent:
         if with_ai:
 
             result["ai_insight"] = (
-                self.get_ai_insight()
+                self.get_ai_insight(state)
             )
 
         return result
@@ -876,7 +957,7 @@ class DataAgent:
 # 单独测试
 # ==========================================================
 
-def main():
+if __name__ == "__main__":
 
     agent = DataAgent()
 
@@ -884,7 +965,7 @@ def main():
 
         DATA_PATH,
 
-        "查保利长大工程有限公司的公路建设期产品运维(JSYW)的本期贷方和贷方累计是否相等"
+        "查询数据概况"
 
     )
 
@@ -895,8 +976,3 @@ def main():
     print(
         result
     )
-
-
-if __name__ == "__main__":
-
-    main()

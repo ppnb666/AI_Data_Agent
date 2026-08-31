@@ -41,7 +41,7 @@ def print_query_value_result(result):
     # -----------------------------------------------------
 
     print(
-        f"👤 客户："
+        f"👤 查询对象："
         f"{result.get('customer', '')}"
     )
 
@@ -177,7 +177,7 @@ def print_compare_rows_result(result):
     )
 
     print(
-        f"👤 客户："
+        f"👤 查询对象："
         f"{result.get('customer', '')}"
     )
 
@@ -382,13 +382,13 @@ def print_rank_rows_result(result):
         print("📋 没有匹配的数据")
         return
 
-    print("\n排名 | 客户名称 | 指标值 | 来源Sheet")
+    print("\n排名 | 数据主体 | 指标值 | 来源Sheet")
     print("-----|----------|--------|----------")
     for row in rows:
         rank = row.get("排名", "")
-        # 尝试提取客户名称
+        # 尝试提取主体名称：优先常见实体列，其次任意字符串值
         customer_name = ""
-        for key in ["客商名称", "客户名称", "客商", "客户"]:
+        for key in ["客商名称", "客户名称", "客户", "姓名", "分组", "产品名称", "部门"]:
             if key in row:
                 customer_name = row[key]
                 break
@@ -429,7 +429,7 @@ def choose_data_file():
     )
 
     file_path = input(
-        "请输入Excel文件路径（直接回车使用默认文件）："
+        "请输入数据文件路径（.xlsx/.xls/.csv/.json，直接回车使用默认文件）："
     ).strip()
 
     # -----------------------------------------------------
@@ -464,19 +464,21 @@ def choose_data_file():
         return None
 
     # -----------------------------------------------------
-    # Excel格式检查
+    # 文件格式检查
     # -----------------------------------------------------
 
     if not file_path.lower().endswith(
         (
             ".xlsx",
-            ".xls"
+            ".xls",
+            ".csv",
+            ".json"
         )
     ):
 
         print(
-            "\n❌ 目前只支持 Excel 文件："
-            ".xlsx / .xls"
+            "\n❌ 目前支持的数据文件："
+            ".xlsx / .xls / .csv / .json"
         )
 
         return None

@@ -157,7 +157,10 @@ def _check_quality_clean(state):
     for col, acts in actions.items():
         for act in acts:
             if act.get("type") == "clean_prefix":
-                return True, f"清洗建议生效: {col} → {act.get('pattern')}"
+                return True, (
+                    f"清洗建议生效: {col} "
+                    f"→ {act.get('prefix')}...{act.get('suffix')}"
+                )
     return True, msg + "（Phase 0 基线：clean_prefix 待 Phase 6 启用）"
 
 

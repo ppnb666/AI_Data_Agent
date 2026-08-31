@@ -6,8 +6,6 @@ Agent State
 
 
 from config import (
-    CHART_PATH,
-    TREND_CHART_PATH,
     REPORT_PATH,
     MD_REPORT_PATH
 )
@@ -59,36 +57,11 @@ class AgentState:
 
 
 
-        # 字段信息
-
-        self.sales_col = None
-
-        self.product_col = None
-
-        self.date_col = None
-
-
-
         # 中间结果
 
         self.clean_count = 0
 
-        self.top_product = None
-
-        self.top_sales = 0
-
         self.outliers = []
-
-
-
-        # 图表
-
-        self.charts = {}
-
-
-        self.chart_path = CHART_PATH
-
-        self.trend_chart_path = TREND_CHART_PATH
 
 
 
@@ -144,16 +117,9 @@ class AgentState:
                 self.df is not None,
 
 
-            "top_product":
-                self.top_product,
-
-
             "has_report":
                 self.report is not None,
 
-
-            "charts":
-                self.charts,
 
             "query_result":
                 self.query_result

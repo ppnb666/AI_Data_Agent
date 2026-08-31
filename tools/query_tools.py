@@ -1,6 +1,9 @@
 import pandas as pd
 
-from tools.field_resolver import find_customer_field as _resolve_customer_field
+from tools.field_resolver import (
+    find_customer_field as _resolve_customer_field,
+    resolve_field as _resolve_field,
+)
 
 
 # ==========================================================
@@ -272,10 +275,14 @@ def find_customer_field(
 def find_any_field(
     schema,
     columns,
-    key
+    key,
+    state=None
 ):
     """
     根据用户语义寻找字段。
+
+    优先级：明确字段匹配 → 语义映射（state.mapping → schema.roles
+    → 关键词兜底）。
     """
 
     if not key:
@@ -297,64 +304,11 @@ def find_any_field(
     key = str(key)
 
     # ------------------------------------------------------
-    # 2. 业务对象特殊处理
+    # 2. 语义匹配：用户词 → 角色 → schema 字段
     #
-    # 例如：
-    #
-    # 业务对象 = 合同
-    #
-    # 应该寻找：
-    #
-    # 合同名称
-    # ------------------------------------------------------
-
-    special_keywords = {
-
-        "业务对象": [
-            "合同名称",
-            "合同"
-        ],
-
-        "合同": [
-            "合同名称",
-            "合同"
-        ],
-
-        "合同名称": [
-            "合同名称"
-        ],
-
-        "业务条件": [
-            "业务类型（新）名称",
-            "业务类型",
-            "业务种类"
-        ]
-    }
-
-    if key in special_keywords:
-
-        candidates = special_keywords[key]
-
-        # 优先当前Sheet真实字段
-        for candidate in candidates:
-
-            for column in columns:
-
-                if candidate == str(column):
-
-                    return column
-
-        # 再做包含匹配
-        for candidate in candidates:
-
-            for column in columns:
-
-                if candidate in str(column):
-
-                    return column
-
-    # ------------------------------------------------------
-    # 3. 通用语义匹配
+    # 不再使用硬编码的"合同名称/业务类型"关键词表，统一委托
+    # field_resolver.resolve_field（state.mapping → schema.roles
+    # → 关键词兜底）。任何行业的字段都能命中。
     # ------------------------------------------------------
 
     category_keywords = {
@@ -365,12 +319,16 @@ def find_any_field(
         ],
 
         "business": [
+            "业务种类",
+            "业务类型",
+            "业务条件",
             "业务"
         ],
 
         "product": [
             "产品",
-            "商品"
+            "商品",
+            "物料"
         ],
 
         "department": [
@@ -380,10 +338,12 @@ def find_any_field(
         ],
 
         "project": [
-            "项目"
+            "项目",
+            "合同",
+            "工程"
         ],
 
-        "time": [
+        "date": [
             "时间",
             "日期",
             "月份",
@@ -391,6 +351,23 @@ def find_any_field(
             "年度",
             "期间",
             "账期"
+        ],
+
+        "amount": [
+            "金额",
+            "余额",
+            "销售",
+            "收入",
+            "利润",
+            "贷方",
+            "借方"
+        ],
+
+        "number": [
+            "数量",
+            "次数",
+            "销量",
+            "人数"
         ]
     }
 
@@ -401,16 +378,69 @@ def find_any_field(
             for keyword in keywords
         ):
 
-            fields = get_schema_fields(
+            field = _resolve_field(
+                state,
                 schema,
+                columns,
                 category
             )
 
-            for field in fields:
+            if field:
 
-                if field in columns:
+                return field
 
-                    return field
+    return None
+
+
+# ==========================================================
+# 获取客户名称包裹模式
+#
+# 修复：此前 normalize_customer 硬编码了"【客商：xxx】"的剥离
+# 规则，这是为财务台账模板定制的。现在改为从 schema 的
+# pattern（由 SchemaAgent 根据样本实际统计，coverage>=0.5 才
+# 记录）读取，仅当样本确认包含该模式时才剥离。
+# ==========================================================
+
+def get_customer_pattern(schema, columns, customer_field):
+    """
+    从 schema 读取客户字段的包裹模式。
+
+    返回 (prefix, suffix) 或 None。
+    schema.fields 的 key 形如 "Sheet.列名"，info.column 为列名；
+    多个 Sheet 存在同名列时取第一个匹配项。
+    """
+
+    if not schema or not customer_field:
+
+        return None
+
+    fields = schema.get("fields", {}) or {}
+
+    for info in fields.values():
+
+        if not isinstance(info, dict):
+
+            continue
+
+        if info.get("column") != customer_field:
+
+            continue
+
+        pattern = info.get("pattern")
+
+        if (
+            pattern
+            and isinstance(pattern, dict)
+            and pattern.get("type") == "prefix_suffix"
+            and pattern.get("prefix")
+        ):
+
+            return (
+                pattern.get("prefix"),
+                pattern.get("suffix", "") or ""
+            )
+
+        break
 
     return None
 
@@ -419,16 +449,12 @@ def find_any_field(
 # 获取客户标准化名称
 # ==========================================================
 
-def normalize_customer(value):
+def normalize_customer(value, pattern=None):
     """
     标准化客户名称。
 
-    支持：
-
-    【客商：xxx】
-    【客户：xxx】
-    客商：xxx
-    客户：xxx
+    1. 优先使用 schema 样本检测到的包裹模式（如 "【客商：", "】"）
+    2. 通用语义前缀兜底：客商：/客户：
     """
 
     if pd.isna(value):
@@ -436,22 +462,25 @@ def normalize_customer(value):
 
     value = str(value).strip()
 
-    wrappers = [
-        ("【客商：", "】"),
-        ("【客户：", "】"),
-        ("客商：", ""),
-        ("客户：", "")
-    ]
+    if pattern:
 
-    for start, end in wrappers:
+        prefix, suffix = pattern
+
+        if value.startswith(prefix):
+
+            value = value[len(prefix):]
+
+            if suffix and value.endswith(suffix):
+
+                value = value[:-len(suffix)]
+
+            return value.strip()
+
+    for start in ("客商：", "客户："):
 
         if value.startswith(start):
 
             value = value[len(start):]
-
-            if end and value.endswith(end):
-
-                value = value[:-len(end)]
 
             break
 
@@ -465,7 +494,8 @@ def normalize_customer(value):
 def filter_customer(
     df,
     customer_field,
-    customer
+    customer,
+    pattern=None
 ):
     """
     客户模糊查询。
@@ -480,12 +510,18 @@ def filter_customer(
         return df.iloc[0:0].copy()
 
     target = normalize_customer(
-        customer
+        customer,
+        pattern
     )
 
     normalized = (
         df[customer_field]
-        .apply(normalize_customer)
+        .apply(
+            lambda v: normalize_customer(
+                v,
+                pattern
+            )
+        )
     )
 
     return df[
@@ -503,7 +539,8 @@ def filter_customer(
 
 def get_customer_keys(
     df,
-    customer_field
+    customer_field,
+    pattern=None
 ):
     """
     获取当前Sheet客户关联键。
@@ -520,7 +557,12 @@ def get_customer_keys(
     values = (
         df[customer_field]
         .dropna()
-        .apply(normalize_customer)
+        .apply(
+            lambda v: normalize_customer(
+                v,
+                pattern
+            )
+        )
     )
 
     return {
@@ -537,7 +579,8 @@ def get_customer_keys(
 def filter_by_customer_keys(
     df,
     customer_field,
-    customer_keys
+    customer_keys,
+    pattern=None
 ):
     """
     根据客户关联键过滤Sheet。
@@ -553,7 +596,12 @@ def filter_by_customer_keys(
 
     normalized = (
         df[customer_field]
-        .apply(normalize_customer)
+        .apply(
+            lambda v: normalize_customer(
+                v,
+                pattern
+            )
+        )
     )
 
     return df[
@@ -568,7 +616,8 @@ def filter_by_customer_keys(
 def apply_filters(
     df,
     schema,
-    filters
+    filters,
+    state=None
 ):
     """
     应用Planner产生的filters。
@@ -610,19 +659,20 @@ def apply_filters(
         target_field = find_any_field(
             schema,
             list(temp.columns),
-            key
+            key,
+            state=state
         )
 
         if not target_field:
 
+            # 修复：此前过滤字段无法匹配时直接返回空表，导致
+            # 一个条件名对不上就让整个查询结果为空。现在记录
+            # 警告后跳过该条件，其余条件继续生效。
             print(
-                f"⚠️ Filter字段无法匹配: {key}"
+                f"⚠️ Filter字段无法匹配，跳过该条件: {key}"
             )
 
-            return (
-                temp.iloc[0:0].copy(),
-                matched_fields
-            )
+            continue
 
         matched_fields[key] = target_field
 
@@ -876,6 +926,13 @@ def query_value_tool(state):
             columns
         )
 
+        # 客户名称包裹模式（仅当样本确认含该模式时才剥离）
+        customer_pattern = get_customer_pattern(
+            schema,
+            columns,
+            customer_field
+        )
+
         # --------------------------------------------------
         # Filter字段
         # --------------------------------------------------
@@ -889,7 +946,8 @@ def query_value_tool(state):
                 field = find_any_field(
                     schema,
                     columns,
-                    key
+                    key,
+                    state=state
                 )
 
                 if field:
@@ -919,7 +977,8 @@ def query_value_tool(state):
             customer_df = filter_customer(
                 df,
                 customer_field,
-                customer
+                customer,
+                customer_pattern
             )
 
         else:
@@ -936,6 +995,9 @@ def query_value_tool(state):
 
             "customer_field":
                 customer_field,
+
+            "customer_pattern":
+                customer_pattern,
 
             "customer_df":
                 customer_df,
@@ -1011,7 +1073,8 @@ def query_value_tool(state):
             filtered_df, matched_fields = apply_filters(
                 info["customer_df"],
                 schema,
-                filters
+                filters,
+                state
             )
 
             print(
@@ -1045,7 +1108,8 @@ def query_value_tool(state):
 
         keys = get_customer_keys(
             info["filtered_df"],
-            info["customer_field"]
+            info["customer_field"],
+            info.get("customer_pattern")
         )
 
         join_customer_keys.update(
@@ -1137,7 +1201,8 @@ def query_value_tool(state):
             joined_df = filter_by_customer_keys(
                 info["customer_df"],
                 info["customer_field"],
-                join_customer_keys
+                join_customer_keys,
+                info.get("customer_pattern")
             )
 
             if len(joined_df) > 0:
@@ -1164,7 +1229,8 @@ def query_value_tool(state):
         joined_df = filter_by_customer_keys(
             info["customer_df"],
             info["customer_field"],
-            join_customer_keys
+            join_customer_keys,
+            info.get("customer_pattern")
         )
 
         if len(joined_df) > 0:
@@ -1264,10 +1330,27 @@ def query_value_tool(state):
 
     summary = {}
 
-    money_fields = get_schema_fields(
-        schema,
-        "money"
-    )
+    # 修复：汇总字段从 schema.roles 的 amount/number 角色取
+    # （唯一事实来源），兼容旧结构 metrics.money 兜底
+    roles = schema.get(
+        "roles",
+        {}
+    ) or {}
+
+    money_fields = [
+        clean_schema_field(f)
+        for f in (
+            roles.get("amount", [])
+            + roles.get("number", [])
+        )
+    ]
+
+    if not money_fields:
+
+        money_fields = get_schema_fields(
+            schema,
+            "money"
+        )
 
     requested_metric_fields = set()
 
@@ -1426,4 +1509,372 @@ def query_value_tool(state):
                 "rows":
                     all_results[:100]
             }
+    }
+
+# ==========================================================
+# 汇总统计工具（合计/总额/总计/求和）
+#
+# 指标优先取任务 metrics，为空时自动取 schema 中全部
+# amount/number 字段 —— 不依赖任何行业字段名。
+# ==========================================================
+
+def aggregate_value_tool(state):
+    """汇总统计金额/数量字段"""
+
+    schema = getattr(
+        state,
+        "workbook_schema",
+        {}
+    )
+
+    sheets = getattr(
+        state,
+        "sheet_profiles",
+        []
+    )
+
+    task = getattr(
+        state,
+        "current_task",
+        None
+    ) or {}
+
+    filters = task.get(
+        "filters",
+        {}
+    )
+
+    metrics = task.get(
+        "metrics",
+        []
+    )
+
+    print(
+        "\n========== Aggregate Tool =========="
+    )
+
+    print(
+        "过滤条件:",
+        filters
+    )
+
+    # --------------------------------------------------
+    # 汇总字段：任务 metrics → schema amount/number 角色
+    # --------------------------------------------------
+
+    if not metrics:
+
+        role_fields = []
+
+        roles = schema.get(
+            "roles",
+            {}
+        )
+
+        for role in ("amount", "number"):
+
+            role_fields.extend(
+                roles.get(
+                    role,
+                    []
+                )
+            )
+
+        # 兼容旧结构 metrics
+        if not role_fields:
+
+            metrics_map = schema.get(
+                "metrics",
+                {}
+            )
+
+            role_fields = (
+                metrics_map.get(
+                    "money",
+                    []
+                )
+                + metrics_map.get(
+                    "number",
+                    []
+                )
+            )
+
+        metrics = [
+            clean_schema_field(f)
+            for f in role_fields
+        ]
+
+    summaries = []
+
+    total = {}
+
+    for sheet in sheets:
+
+        df = sheet["df"].copy()
+
+        sheet_name = sheet["sheet"]
+
+        columns = list(df.columns)
+
+        # 过滤
+        if filters:
+
+            filtered_df, _ = apply_filters(
+                df,
+                schema,
+                filters,
+                state
+            )
+
+        else:
+
+            filtered_df = df
+
+        if len(filtered_df) == 0:
+            continue
+
+        sheet_summary = {}
+
+        for metric in metrics:
+
+            field = match_field(
+                schema,
+                columns,
+                metric
+            )
+
+            if not field:
+
+                continue
+
+            series = pd.to_numeric(
+                filtered_df[field],
+                errors="coerce"
+            ).dropna()
+
+            if len(series) == 0:
+                continue
+
+            sheet_summary[field] = round(
+                float(series.sum()),
+                2
+            )
+
+        if sheet_summary:
+
+            summaries.append(
+                {
+                    "sheet": sheet_name,
+                    "summary": sheet_summary
+                }
+            )
+
+            for field, value in sheet_summary.items():
+
+                total[field] = round(
+                    total.get(field, 0.0) + value,
+                    2
+                )
+
+    result = {
+        "type": "aggregate_value",
+        "status": "success",
+        "filters": filters,
+        "metrics": metrics,
+        "total_count": sum(len(s["df"]) for s in sheets),
+        "summary": total,
+        "data": {
+            "sheet_summaries": summaries,
+            "rows": []
+        }
+    }
+
+    if not total:
+
+        result["status"] = "success"
+
+        result["message"] = "没有可汇总的数值字段"
+
+    return result
+
+
+# ==========================================================
+# 异常检测工具（均值 ± 2σ）
+# ==========================================================
+
+def detect_anomaly_tool(state):
+    """检测数值字段的异常值（均值±2σ）"""
+
+    schema = getattr(
+        state,
+        "workbook_schema",
+        {}
+    )
+
+    sheets = getattr(
+        state,
+        "sheet_profiles",
+        []
+    )
+
+    task = getattr(
+        state,
+        "current_task",
+        None
+    ) or {}
+
+    filters = task.get(
+        "filters",
+        {}
+    )
+
+    metrics = task.get(
+        "metrics",
+        []
+    )
+
+    print(
+        "\n========== Anomaly Tool =========="
+    )
+
+    print(
+        "过滤条件:",
+        filters
+    )
+
+    # 异常检测字段：任务 metrics → schema amount/number 角色
+    if not metrics:
+
+        roles = schema.get(
+            "roles",
+            {}
+        )
+
+        for role in ("amount", "number"):
+
+            metrics.extend(
+                roles.get(
+                    role,
+                    []
+                )
+            )
+
+        if not metrics:
+
+            metrics_map = schema.get(
+                "metrics",
+                {}
+            )
+
+            metrics = (
+                metrics_map.get(
+                    "money",
+                    []
+                )
+                + metrics_map.get(
+                    "number",
+                    []
+                )
+            )
+
+    anomaly_rows = []
+
+    anomaly_summary = {}
+
+    for sheet in sheets:
+
+        df = sheet["df"].copy()
+
+        sheet_name = sheet["sheet"]
+
+        columns = list(df.columns)
+
+        if filters:
+
+            filtered_df, _ = apply_filters(
+                df,
+                schema,
+                filters,
+                state
+            )
+
+        else:
+
+            filtered_df = df
+
+        if len(filtered_df) == 0:
+            continue
+
+        for metric in metrics:
+
+            field = match_field(
+                schema,
+                columns,
+                metric
+            )
+
+            if not field:
+
+                continue
+
+            series = pd.to_numeric(
+                filtered_df[field],
+                errors="coerce"
+            ).dropna()
+
+            if len(series) < 3:
+                continue
+
+            mean = series.mean()
+
+            std = series.std()
+
+            if std == 0 or pd.isna(std):
+                continue
+
+            lower = mean - 2 * std
+
+            upper = mean + 2 * std
+
+            outlier_mask = (
+                (series < lower)
+                | (series > upper)
+            )
+
+            count = int(outlier_mask.sum())
+
+            if count > 0:
+
+                anomaly_summary[field] = count
+
+                for idx in series[outlier_mask].index:
+
+                    row = df.loc[idx].to_dict()
+
+                    row["来源Sheet"] = sheet_name
+
+                    row["_anomaly_field"] = field
+
+                    row["_anomaly_value"] = round(
+                        float(series.loc[idx]),
+                        2
+                    )
+
+                    row["_anomaly_range"] = [
+                        round(lower, 2),
+                        round(upper, 2)
+                    ]
+
+                    anomaly_rows.append(row)
+
+    return {
+        "type": "detect_anomaly",
+        "status": "success",
+        "filters": filters,
+        "metrics": metrics,
+        "total_count": len(anomaly_rows),
+        "anomaly_summary": anomaly_summary,
+        "data": {
+            "rows": anomaly_rows[:100]
+        }
     }

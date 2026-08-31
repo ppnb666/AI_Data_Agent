@@ -11,6 +11,8 @@ DataProfiler Agent V2
 """
 
 import json
+import os
+
 import pandas as pd
 from typing import Dict, Any, List, Optional
 
@@ -167,7 +169,9 @@ fields中识别: customer, amount, date, product, department
                     })
 
             # ---- 文本字段异常值检测（通用模式） ----
-            elif pd.api.types.is_object_dtype(col_data):
+            # 修复：pandas 2.x StringDtype 下 is_object_dtype 返回 False，
+            # 文本检测永远不会执行，改用 is_string_dtype
+            elif pd.api.types.is_string_dtype(col_data):
                 # 检测格式一致性
                 clean_samples = col_data.dropna().astype(str).str.strip()
                 clean_samples = clean_samples[clean_samples != ""]
@@ -234,19 +238,61 @@ fields中识别: customer, amount, date, product, department
                     "reason": f"空值率 {info['null_rate']}% 适中，建议用众数填充"
                 })
 
-            # ---- 文本字段清洗 ----
-            if pd.api.types.is_object_dtype(df[col]):
-                # 检测是否有"【前缀】"模式需要清理
-                samples = df[col].dropna().astype(str)
+            # ---- 文本字段清洗（样本驱动，修复：不再硬编码"【】"）
+            #
+            # 从实际样本统计前后缀：仅当覆盖率 > 50% 时生成清洗动作，
+            # 并记录样本中真实出现的前缀（如"【客商："）与后缀（"】"），
+            # 样本不含该模式则完全不生成，避免误伤正常文本列。
+            # --------------------------------------------------
+            if pd.api.types.is_string_dtype(df[col]):
+                import re as _re
+
+                samples = df[col].dropna().astype(str).str.strip()
+                samples = samples[samples != ""]
+
                 if len(samples) > 10:
-                    has_prefix = samples.str.contains(r"^【").sum()
-                    if has_prefix / len(samples) > 0.5:
-                        actions.append({
-                            "type": "clean_prefix",
-                            "pattern": r"^【.*?：",
-                            "suffix_pattern": r"】$",
-                            "reason": "数据包含统一的前缀格式，建议提取干净的名称"
-                        })
+
+                    wrapped = samples.str.startswith("【")
+
+                    coverage = float(wrapped.sum()) / len(samples)
+
+                    if coverage > 0.5:
+
+                        # 统计样本中出现最多的前缀标签（【label：）
+                        label_count = {}
+
+                        for sample in samples[wrapped].head(200):
+
+                            match = _re.match(
+                                r"^【([^【】:：]+)[:：]",
+                                sample
+                            )
+
+                            if match:
+
+                                label = match.group(1)
+
+                                label_count[label] = (
+                                    label_count.get(label, 0) + 1
+                                )
+
+                        if label_count:
+
+                            label = max(
+                                label_count,
+                                key=label_count.get
+                            )
+
+                            actions.append({
+                                "type": "clean_prefix",
+                                "prefix": f"【{label}：",
+                                "suffix": "】",
+                                "reason": (
+                                    f"数据包含统一前缀格式【{label}：...】"
+                                    f"（覆盖率{coverage:.0%}），"
+                                    f"建议提取干净的名称"
+                                )
+                            })
 
             if actions:
                 suggestions["actions"][col] = actions
@@ -294,44 +340,199 @@ fields中识别: customer, amount, date, product, department
                     if len(mode_val) > 0:
                         df_cleaned[col] = df_cleaned[col].fillna(mode_val[0])
 
-                # ---- 清理前缀 ----
+                # ---- 清理前缀（样本驱动：仅剥离实际统计出的前后缀）----
                 elif action_type == "clean_prefix":
-                    pattern = action.get("pattern", r"^【.*?：")
-                    suffix = action.get("suffix_pattern", r"】$")
-                    df_cleaned[col] = df_cleaned[col].astype(str).str.replace(pattern, "", regex=True)
-                    df_cleaned[col] = df_cleaned[col].str.replace(suffix, "", regex=True)
-                    df_cleaned[col] = df_cleaned[col].str.strip()
+                    prefix = action.get("prefix", "")
+                    suffix = action.get("suffix", "")
+                    cleaned = df_cleaned[col].astype(str).str.strip()
+                    if prefix:
+                        mask = cleaned.str.startswith(prefix)
+                        cleaned[mask] = cleaned[mask].str[len(prefix):]
+                    if suffix:
+                        cleaned = cleaned.str.replace(suffix, "", regex=False)
+                    df_cleaned[col] = cleaned.str.strip()
 
         return df_cleaned
 
     # ==========================================================
-    # 5. 选择Sheet（原有逻辑）
+    # 5. 选择Sheet
+    #
+    # 通用化：先尝试 LLM 判断（输入各表列名 + 前2行样本 + 用户
+    # 问题），失败或 DISABLE_LLM_SCHEMA=1 时降级为通用打分：
+    # 命中 schema.roles 任意角色的列数 + 非空密度，不再依赖任何
+    # 财务关键词。
     # ==========================================================
-    def select_sheet(self, sheet_profiles, query):
-        keywords = []
-        if "业务类型" in query or "业务类型（新）" in query:
-            keywords.append("业务类型")
-        if "本期贷方" in query:
-            keywords.append("本期贷方")
-        if "贷方累计" in query:
-            keywords.append("贷方累计")
-        if "客商" in query or "客户" in query:
-            keywords.append("客商名称")
+    def select_sheet(self, sheet_profiles, query, schema=None):
+
+        if len(sheet_profiles) <= 1:
+
+            return sheet_profiles[0]
+
+        # ----------------------------------------------
+        # 1. LLM 判断（可被 DISABLE_LLM_SCHEMA=1 关闭）
+        # ----------------------------------------------
+
+        if not os.environ.get("DISABLE_LLM_SCHEMA") == "1":
+
+            selected = self._select_sheet_with_llm(
+                sheet_profiles,
+                query
+            )
+
+            if selected:
+
+                return selected
+
+        # ----------------------------------------------
+        # 2. 通用打分降级
+        # ----------------------------------------------
+
+        return self._select_sheet_by_score(
+            sheet_profiles,
+            schema
+        )
+
+    def _select_sheet_with_llm(self, sheet_profiles, query):
+        """LLM 判断最相关 Sheet，失败返回 None"""
+
+        try:
+
+            lines = []
+
+            for i, sheet in enumerate(sheet_profiles, 1):
+
+                df = sheet["df"]
+
+                lines.append(
+                    f"表{i}名称: {sheet['sheet']}"
+                )
+
+                lines.append(
+                    f"列: {list(df.columns)}"
+                )
+
+                lines.append(
+                    f"样本: {df.head(2).to_dict(orient='records')}"
+                )
+
+            prompt = (
+                f"用户问题: {query}\n\n"
+                f"数据表概况:\n{chr(10).join(lines)}\n\n"
+                "只输出JSON（不要任何其他内容），选择与用户问题"
+                "最相关的一张表：\n"
+                '{"sheet": "表名"} 或 {"sheet": null}（无法判断时）'
+            )
+
+            result = self.llm.chat_json([
+
+                {
+                    "role": "system",
+                    "content": "你是数据表选择器，只输出JSON。"
+                },
+
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ])
+
+            if not result:
+
+                return None
+
+            name = str(result.get("sheet", "")).strip()
+
+            if not name:
+
+                return None
+
+            # 精确 / 包含匹配
+            for sheet in sheet_profiles:
+
+                if str(sheet["sheet"]) == name:
+
+                    return sheet
+
+            for sheet in sheet_profiles:
+
+                if (
+                    name in str(sheet["sheet"])
+                    or
+                    str(sheet["sheet"]) in name
+                ):
+
+                    return sheet
+
+        except Exception as e:
+
+            print(
+                f"select_sheet LLM失败，降级通用打分: {e}"
+            )
+
+        return None
+
+    def _select_sheet_by_score(self, sheet_profiles, schema):
+        """
+        通用打分：命中 schema.roles 任意角色的列数 × 10
+        + 非空密度（0~1）
+        """
 
         best_sheet = None
+
         max_score = -1
 
+        # 收集 schema 角色列（去 Sheet 前缀）
+        role_columns = set()
+
+        if schema:
+
+            roles = schema.get(
+                "roles",
+                {}
+            ) or {}
+
+            for fields in roles.values():
+
+                for field in fields:
+
+                    role_columns.add(
+                        str(field).split(".", 1)[-1]
+                    )
+
         for sheet in sheet_profiles:
-            score = 0
-            columns = sheet["df"].columns.tolist()
-            for key in keywords:
-                for col in columns:
-                    if key in str(col):
-                        score += 1
-            print(f"Sheet匹配评分:{sheet['sheet']} -> {score}")
+
+            df = sheet["df"]
+
+            columns = list(df.columns)
+
+            role_hit = sum(
+                1
+                for col in columns
+                if col in role_columns
+            )
+
+            if len(df) > 0:
+
+                density = float(
+                    df.notna().mean().mean()
+                )
+
+            else:
+
+                density = 0.0
+
+            score = role_hit * 10 + density
+
+            print(
+                f"Sheet通用评分: {sheet['sheet']} "
+                f"-> {score:.2f} "
+                f"(角色命中{role_hit}, 密度{density:.2f})"
+            )
 
             if score > max_score:
+
                 max_score = score
+
                 best_sheet = sheet
 
         return best_sheet

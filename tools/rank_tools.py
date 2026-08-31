@@ -1,15 +1,70 @@
 """
-排名工具：按客户分组汇总指定指标，并排序
+排名工具：按分组字段汇总指定指标，并排序
+
+通用化：
+1. 分组字段不再强依赖"客户"——按 customer → business → product
+   → department → project 优先级取 schema 角色字段，全部缺失时
+   不分组、直接对全表按指标排序
+2. metrics 为空时从 schema.roles 的 amount/number 角色自动补齐，
+   不再要求 Planner 必须给出指标
 """
 
 import pandas as pd
 
-from tools.field_resolver import find_customer_field
+from tools.field_resolver import (
+    find_customer_field,
+    resolve_field,
+    resolve_role_fields,
+)
+from tools.query_tools import match_field
+
+
+# 分组字段优先级（customer 缺失时依次降级）
+GROUP_ROLE_PRIORITY = [
+    "customer",
+    "business",
+    "product",
+    "department",
+    "project",
+]
+
+METRIC_ROLE_PRIORITY = [
+    "amount",
+    "number",
+]
+
+
+def _pick_metric(state, schema, columns, metrics):
+    """
+    解析排名指标：
+    1. 任务 metrics → match_field 精确映射
+    2. 仍无 → schema.roles amount/number 依次取第一个可用字段
+    """
+    for metric in metrics:
+        field = match_field(
+            schema,
+            columns,
+            metric
+        )
+        if field:
+            return field
+
+    for role in METRIC_ROLE_PRIORITY:
+        fields = resolve_role_fields(
+            state,
+            schema,
+            columns,
+            role
+        )
+        if fields:
+            return fields[0]
+
+    return None
 
 
 def rank_rows_tool(state, task=None):
     """
-    按客户分组汇总指定的指标字段，并排序返回前N条记录。
+    按分组字段汇总指定的指标字段，并排序返回前N条记录。
 
     修复说明：
     此前该函数不接收当前任务，而是自己回头去 state.plan 里按
@@ -47,10 +102,6 @@ def rank_rows_tool(state, task=None):
 
     # 提取参数
     metrics = task.get("metrics", [])
-    if not metrics:
-        return {"type": "rank_rows", "status": "failed", "message": "未指定要排名的指标字段"}
-    metric = metrics[0]  # 只取第一个指标
-
     condition = task.get("condition", {})
     order = condition.get("order", "desc")
     limit = condition.get("limit", 10)
@@ -60,26 +111,23 @@ def rank_rows_tool(state, task=None):
     schema = getattr(state, "workbook_schema", {})
     sheets = getattr(state, "sheet_profiles", [])
 
-    all_results = []  # 存储所有Sheet的客户汇总数据
+    all_results = []  # 存储所有Sheet的汇总数据
+    used_metric = None
 
     for sheet in sheets:
         df = sheet["df"].copy()
         sheet_name = sheet["sheet"]
         columns = list(df.columns)
 
-        # 找客户字段（修复：改用统一的field_resolver，优先读取
-        # state.mapping中用户手动确认过的映射，而不是只看schema猜测）
-        customer_field = find_customer_field(state, schema, columns)
-        if not customer_field:
+        # 解析排名指标（任务 metrics → schema 角色字段）
+        metric = _pick_metric(state, schema, columns, metrics)
+        if not metric:
             continue
+        if used_metric is None:
+            used_metric = metric
 
-        # 如果 metric 不在当前sheet的列中，跳过
-        if metric not in columns:
-            continue
-
-        # 将指标列转换为数值，非数值转为NaN
-        df[metric] = pd.to_numeric(df[metric], errors='coerce')
-        # 删除指标为NaN的行（无法参与汇总）
+        # 指标列转数值（解析失败降级为 NaN）
+        df[metric] = pd.to_numeric(df[metric], errors="coerce")
         df = df[df[metric].notna()]
 
         if len(df) == 0:
@@ -94,17 +142,46 @@ def rank_rows_tool(state, task=None):
                         matched_col = col
                         break
                 if matched_col:
-                    df = df[df[matched_col].astype(str).str.contains(str(value), na=False, regex=False)]
-
-        # 如果指定了客户，过滤
-        if customer:
-            df = df[df[customer_field].astype(str).str.contains(customer, na=False, regex=False)]
+                    df = df[df[matched_col].astype(str).str.contains(
+                        str(value), na=False, regex=False)]
 
         if len(df) == 0:
             continue
 
-        # 按客户字段分组，对指标求和
-        grouped = df.groupby(customer_field, as_index=False)[metric].sum()
+        # 分组字段：customer → business → product → department → project
+        # （注意：不用 find_customer_field，避免其 person 兜底把
+        # 姓名列当作分组字段——对排名而言应按业务维度而非个人分组）
+        group_field = None
+        for role in GROUP_ROLE_PRIORITY:
+            role_fields = resolve_role_fields(
+                state,
+                schema,
+                columns,
+                role
+            )
+            if role_fields:
+                group_field = role_fields[0]
+                break
+
+        # 指定了客户时，按客户过滤（此时必须有客户字段）
+        if customer:
+            if not group_field:
+                continue
+            df = df[df[group_field].astype(str).str.contains(
+                customer, na=False, regex=False)]
+            if len(df) == 0:
+                continue
+
+        if group_field:
+            # 按分组字段汇总
+            grouped = df.groupby(group_field, as_index=False)[metric].sum()
+        else:
+            # 无任何分组字段：不分组，直接全表一行（指标合计）
+            total = float(df[metric].sum())
+            grouped = pd.DataFrame([
+                {"分组": "全部", metric: total}
+            ])
+
         # 添加Sheet来源
         grouped["来源Sheet"] = sheet_name
         all_results.extend(grouped.to_dict(orient="records"))
@@ -120,7 +197,10 @@ def rank_rows_tool(state, task=None):
 
     # 排序（此时所有值都是数值）
     reverse = (order == "desc")
-    all_results.sort(key=lambda x: x.get(metric, 0), reverse=reverse)
+    all_results.sort(
+        key=lambda x: x.get(used_metric, 0),
+        reverse=reverse
+    )
 
     # 取前N条
     top_results = all_results[:limit]
@@ -133,7 +213,7 @@ def rank_rows_tool(state, task=None):
         "type": "rank_rows",
         "status": "success",
         "message": f"排名完成，共 {len(all_results)} 条记录，返回前 {len(top_results)} 条",
-        "metric": metric,
+        "metric": used_metric,
         "order": order,
         "limit": limit,
         "total_count": len(all_results),

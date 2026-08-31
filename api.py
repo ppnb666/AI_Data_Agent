@@ -153,17 +153,24 @@ def health():
 
 
 # ==========================================================
+# 支持的文件扩展名
+# ==========================================================
+SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".csv", ".json"}
+
+
+# ==========================================================
 # 接口1：文件预览 + 字段猜测
 # ==========================================================
 @app.post("/preview")
 async def preview_file(file: UploadFile = File(...)):
     """
-    上传Excel文件，返回列名、示例数据以及LLM猜测的字段映射。
+    上传数据文件，返回列名、示例数据以及LLM猜测的字段映射。
+    支持 .xlsx / .xls / .csv / .json。
     """
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in {".xlsx", ".xls"}:
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"仅支持 {sorted(SUPPORTED_EXTENSIONS)} 文件")
 
     # 保存临时文件
     try:
@@ -175,8 +182,12 @@ async def preview_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"文件保存失败: {str(e)}")
 
     try:
-        # 读取前5行数据（包括列名）
-        df_preview = pd.read_excel(tmp_path, nrows=5)
+        # 用统一加载器读取（复用表头启发式检测）
+        from utils.data_loader import load_file
+
+        sheets = load_file(tmp_path)
+        first = sheets[0]
+        df_preview = first["df"]
         if df_preview.empty:
             raise HTTPException(status_code=400, detail="文件为空或无法读取")
 
@@ -274,8 +285,8 @@ async def analyze(
     # 验证文件
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in {".xlsx", ".xls"}:
-        raise HTTPException(status_code=400, detail="目前只支持 .xlsx 和 .xls 文件")
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"目前只支持 {sorted(SUPPORTED_EXTENSIONS)} 文件")
 
     if not query.strip():
         raise HTTPException(status_code=400, detail="分析需求不能为空")

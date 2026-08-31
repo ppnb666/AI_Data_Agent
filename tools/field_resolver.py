@@ -1,42 +1,43 @@
 """
 字段解析统一模块
 
-修复背景：
-此前 rank_tools.py / compare_tools.py / query_tools.py 各自都有
-一份几乎相同的 find_customer_field()（三份重复代码），而且都只走
-"schema.entities（LLM自动猜测） → 关键词兜底" 这条路径。
-
-与此同时，api.py 有一整套"LLM猜字段 → 用户在前端确认 → 存进
-state.mapping"的流程，但从未被任何工具函数读取——用户手动纠正
-的映射结果会被静默丢弃，不会真正影响分析结果。
-
-本模块把两套机制合并成统一的优先级：
-
+优先级（全系统统一）：
     1. state.mapping（用户显式确认过的，最权威）
-    2. schema["entities"]（LLM在SchemaAgent阶段自动猜测的）
-    3. 关键词兜底（历史遗留，最后一道保险）
+    2. schema["roles"]（SchemaAgent LLM 识别 / 关键词兜底的
+       字段角色索引，通用化改造后的唯一事实来源）
+    3. 关键词兜底（KEYWORD_ROLES，最后一道保险）
 
-并把"customer"这个概念用的三份重复代码收敛为一处；后续如果要
-支持"customer"之外的其它概念（amount/date/product/department/
-project……），也统一走 resolve_field，不用再复制三份。
+此前 rank_tools / compare_tools / query_tools 各自维护一份
+find_customer_field() 的重复实现，现在统一收敛到本模块；
+"customer"之外的其它概念（amount/date/product/department/
+project……）也统一走 resolve_field / resolve_role_fields。
 """
 
 from typing import Dict, List, Optional
 
+from schema.keyword_roles import KEYWORD_ROLES
+
 
 # ==========================================================
-# 内置的关键词兜底表
-#
-# 注意：这是"通用化改造"里第2步要动的地方——目前这份关键词表
-# 是财务/合同场景专属的（客商名称、贷方等）。当你的Agent要支持
-# 其它行业时，这里应该改成从行业模板加载，或者干脆去掉、完全
-# 依赖 state.mapping + schema entities（LLM驱动），关键词表只
-# 作为两者都失败时的最后兜底。
+# 关键词兜底表（与 schema/keyword_roles.py 同一份词表，
+# 覆盖全部角色：customer/business/product/department/project/
+# region/person/category/amount/number/date/id/text）
 # ==========================================================
 
 DEFAULT_FALLBACK_KEYWORDS: Dict[str, List[str]] = {
-    "customer": ["客商名称", "客户名称", "客户", "客商"],
+    role: list(keywords)
+    for role, keywords in KEYWORD_ROLES.items()
 }
+
+# 旧概念名 → 角色名 别名
+_ROLE_ALIAS = {
+    "money": "amount",
+    "time": "date",
+}
+
+
+def _normalize_key(key: str) -> str:
+    return _ROLE_ALIAS.get(str(key), str(key))
 
 
 def clean_field(field: str) -> str:
@@ -51,12 +52,34 @@ def clean_field(field: str) -> str:
 
 
 def get_schema_fields(schema: dict, key: str) -> List[str]:
-    """从 schema['entities'][key] 中取出候选字段名（已去除Sheet前缀）"""
+    """
+    从 schema 中取出候选字段名（已去除 Sheet 前缀）。
+
+    优先读 schema["roles"]（唯一事实来源），
+    兼容旧结构 entities / metrics / time_fields。
+    """
     if not isinstance(schema, dict):
         return []
+    role = _normalize_key(key)
+
+    # 新结构：roles 角色索引
+    roles = schema.get("roles", {}) or {}
+    if role in roles:
+        return [clean_field(f) for f in roles[role]]
+
+    # 兼容旧结构
     entities = schema.get("entities", {}) or {}
-    raw_fields = entities.get(key, []) or []
-    return [clean_field(f) for f in raw_fields]
+    if role in entities:
+        return [clean_field(f) for f in entities[role]]
+
+    metrics = schema.get("metrics", {}) or {}
+    if role in metrics:
+        return [clean_field(f) for f in metrics[role]]
+
+    if role == "date":
+        return [clean_field(f) for f in schema.get("time_fields", [])]
+
+    return []
 
 
 def resolve_field(
@@ -97,11 +120,20 @@ def resolve_field(
         # 现在处理的是Sheet2），不强行返回，继续往下走schema兜底
 
     # ------------------------------------------------------
-    # 2. Schema（LLM）猜测的候选
+    # 2. Schema（LLM/关键词识别）的候选
     # ------------------------------------------------------
     for field in get_schema_fields(schema, key):
         if field in columns:
             return field
+
+    # 客户字段缺失时，person（姓名列）可作为查询实体兜底
+    if _normalize_key(key) == "customer":
+
+        for field in get_schema_fields(schema, "person"):
+
+            if field in columns:
+
+                return field
 
     # ------------------------------------------------------
     # 3. 关键词兜底
@@ -109,13 +141,60 @@ def resolve_field(
     keywords = (
         fallback_keywords
         if fallback_keywords is not None
-        else DEFAULT_FALLBACK_KEYWORDS.get(key, [])
+        else DEFAULT_FALLBACK_KEYWORDS.get(_normalize_key(key), [])
     )
     for column in columns:
         if any(k in str(column) for k in keywords):
             return column
 
+    # 客户关键词兜底同样允许命中 person 关键词（姓名列）
+    if _normalize_key(key) == "customer":
+
+        person_keywords = DEFAULT_FALLBACK_KEYWORDS.get("person", [])
+
+        for column in columns:
+
+            if any(k in str(column) for k in person_keywords):
+
+                return column
+
     return None
+
+
+def resolve_role_fields(
+    state,
+    schema: dict,
+    columns: List[str],
+    role: str,
+) -> List[str]:
+    """
+    解析某个角色的全部候选字段（只返回当前 Sheet 中真实存在的列）。
+
+    例如 rank_tools 需要"按 customer → business/product/department/
+    project 依次取分组字段"时，逐个角色调用本函数即可。
+
+    优先级：state.mapping → schema.roles → 关键词兜底
+    """
+    role = _normalize_key(role)
+
+    # 1. 用户确认过的映射
+    mapping = getattr(state, "mapping", None) or {}
+    mapped = mapping.get(role)
+    if mapped:
+        mapped = clean_field(mapped)
+        if mapped in columns:
+            return [mapped]
+
+    # 2. Schema 角色索引（多个 Sheet 的同名列去重）
+    schema_fields = get_schema_fields(schema, role)
+    found = list(dict.fromkeys(f for f in schema_fields if f in columns))
+    if found:
+        return found
+
+    # 3. 关键词兜底（列名包含任意角色关键词）
+    keywords = DEFAULT_FALLBACK_KEYWORDS.get(role, [])
+    found = [c for c in columns if any(k in str(c) for k in keywords)]
+    return found
 
 
 def find_customer_field(state, schema: dict, columns: List[str]) -> Optional[str]:

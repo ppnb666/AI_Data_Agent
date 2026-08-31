@@ -1,7 +1,7 @@
-import re
 import pandas as pd
 
-from tools.field_resolver import find_customer_field, clean_field
+from tools.field_resolver import find_customer_field
+from utils.numbers import parse_numeric_value, is_numeric_constant
 
 
 def get_compare_task(state):
@@ -11,179 +11,6 @@ def get_compare_task(state):
             return task
 
     return None
-
-
-# ==========================================================
-# 数字 / 金额解析
-# ==========================================================
-
-def parse_numeric_value(value):
-    """
-    将常见中文金额转换成数字。
-
-    支持：
-
-    100
-    100.5
-    1,000
-    100万
-    100万元
-    1.5亿
-    1.5亿元
-    -100万
-
-    返回：
-        float
-
-    解析失败：
-        raise ValueError
-    """
-
-    # ------------------------------------------
-    # 如果本身就是数字
-    # ------------------------------------------
-
-    if isinstance(value, (int, float)):
-
-        if pd.isna(value):
-            raise ValueError(
-                f"无法解析空值: {value}"
-            )
-
-        return float(value)
-
-    # ------------------------------------------
-    # 字符串清洗
-    # ------------------------------------------
-
-    text = str(value).strip()
-
-    if not text:
-
-        raise ValueError(
-            "数值不能为空"
-        )
-
-    # 去掉千分位
-    text = text.replace(",", "")
-
-    # 去掉空格
-    text = text.replace(" ", "")
-
-    # 去掉常见货币单位
-    text = text.replace("人民币", "")
-    text = text.replace("元", "")
-
-    # ------------------------------------------
-    # 亿
-    # ------------------------------------------
-
-    if text.endswith("亿"):
-
-        number_text = text[:-1]
-
-        try:
-
-            number = float(number_text)
-
-        except ValueError:
-
-            raise ValueError(
-                f"无法解析金额: {value}"
-            )
-
-        return number * 100_000_000
-
-    # ------------------------------------------
-    # 万
-    # ------------------------------------------
-
-    if text.endswith("万"):
-
-        number_text = text[:-1]
-
-        try:
-
-            number = float(number_text)
-
-        except ValueError:
-
-            raise ValueError(
-                f"无法解析金额: {value}"
-            )
-
-        return number * 10_000
-
-    # ------------------------------------------
-    # 普通数字
-    # ------------------------------------------
-
-    try:
-
-        return float(text)
-
-    except ValueError:
-
-        raise ValueError(
-            f"无法解析数值: {value}"
-        )
-
-
-def is_numeric_constant(value):
-    """
-    判断 Planner 给出的 right 是否是常量。
-
-    True:
-        100
-        100万
-        1.5亿
-
-    False:
-        贷方累计
-        期末余额
-    """
-
-    if isinstance(value, (int, float)):
-
-        return True
-
-    if value is None:
-
-        return False
-
-    text = str(value).strip()
-
-    if not text:
-
-        return False
-
-    text = text.replace(",", "")
-    text = text.replace(" ", "")
-    text = text.replace("人民币", "")
-    text = text.replace("元", "")
-
-    # 普通数字
-    if re.fullmatch(
-        r"[-+]?\d+(?:\.\d+)?",
-        text
-    ):
-        return True
-
-    # 万
-    if re.fullmatch(
-        r"[-+]?\d+(?:\.\d+)?万",
-        text
-    ):
-        return True
-
-    # 亿
-    if re.fullmatch(
-        r"[-+]?\d+(?:\.\d+)?亿",
-        text
-    ):
-        return True
-
-    return False
 
 
 # ==========================================================
@@ -579,6 +406,10 @@ def compare_rows_tool(state):
         # ----------------------------------------------
         # 找客户字段（修复：改用统一的field_resolver，优先读取
         # state.mapping中用户手动确认过的映射）
+        #
+        # 修复：此前只要找不到客户字段就跳过整个Sheet，导致没有
+        # 客户字段的数据（如库存表）完全无法参与比较。现在仅当
+        # 任务确实需要按客户过滤时才要求客户字段。
         # ----------------------------------------------
 
         customer_field = find_customer_field(
@@ -587,7 +418,7 @@ def compare_rows_tool(state):
             columns
         )
 
-        if not customer_field:
+        if customer and not customer_field:
             continue
 
         # ----------------------------------------------

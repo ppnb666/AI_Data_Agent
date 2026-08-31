@@ -44,7 +44,18 @@ Schema Agent 不负责：
 """
 
 import logging
+import os
 import re
+
+from schema.keyword_roles import KEYWORD_ROLES
+from schema.roles import (
+    ALL_ROLES,
+    DIMENSION_ROLES,
+    METRIC_ROLES,
+    LLM_ALLOWED_ROLES,
+    ROLE_LABELS,
+    normalize_role,
+)
 
 
 class SchemaAgent:
@@ -58,10 +69,18 @@ class SchemaAgent:
         )
 
     # ==================================================
+    # 包裹模式检测（如 【客商：xxx】）
+    # ==================================================
+
+    _PATTERN_RE = re.compile(
+        r"^【(?P<label>[^【】:：]+)[:：](?P<body>[^】]+)】$"
+    )
+
+    # ==================================================
     # 主入口：分析 Excel
     # ==================================================
 
-    def analyze(self, sheet_profiles):
+    def analyze(self, sheet_profiles, user_query="", mapping=None):
 
         schema = {
 
@@ -72,38 +91,30 @@ class SchemaAgent:
             "sheets": [],
 
             # ==========================================
-            # 实体字段
+            # 字段角色索引（唯一事实来源）
+            #
+            # {
+            #   "customer": ["Sheet1.客商名称", ...],
+            #   "amount":   [...],
+            #   ...
+            # }
             # ==========================================
 
-            "entities": {
-
-                "customer": [],
-                "business": [],
-                "product": [],
-                "department": [],
-                "project": []
-
+            "roles": {
+                role: []
+                for role in ALL_ROLES
             },
 
             # ==========================================
-            # 指标字段
+            # 用户显式确认的映射（state.mapping）
             # ==========================================
 
-            "metrics": {
-
-                "money": [],
-                "number": []
-
-            },
+            "user_mapping": dict(
+                mapping or {}
+            ),
 
             # ==========================================
-            # 时间字段
-            # ==========================================
-
-            "time_fields": [],
-
-            # ==========================================
-            # 所有字段
+            # 所有字段（含角色 / 单位 / 包裹模式）
             # ==========================================
 
             "fields": {},
@@ -118,7 +129,27 @@ class SchemaAgent:
             # 查询地图
             # ==========================================
 
-            "query_map": {}
+            "query_map": {},
+
+            # ==========================================
+            # 兼容旧结构（迁移期同步维护，消费方全部
+            # 迁移到 roles 后删除）
+            # ==========================================
+
+            "entities": {
+                "customer": [],
+                "business": [],
+                "product": [],
+                "department": [],
+                "project": []
+            },
+
+            "metrics": {
+                "money": [],
+                "number": []
+            },
+
+            "time_fields": []
 
         }
 
@@ -138,6 +169,17 @@ class SchemaAgent:
 
             columns = list(
                 df.columns
+            )
+
+            # ------------------------------------------
+            # LLM 角色识别（每 Sheet 一次调用）
+            # ------------------------------------------
+
+            llm_roles = self.classify_roles_with_llm(
+                sheet_name,
+                columns,
+                df,
+                user_query
             )
 
             for column in columns:
@@ -180,24 +222,24 @@ class SchemaAgent:
                     }
 
                 # ------------------------------------------
-                # 字段分类
+                # 字段角色：LLM 优先 → 关键词兜底 → unknown
                 # ------------------------------------------
 
-                self.classify_field(
-
+                self.assign_role(
                     schema,
-
-                    sheet_name,
-
-                    col
-
+                    field,
+                    llm_roles
                 )
 
         # ==================================================
-        # 2.去重
+        # 2.去重 + 同步旧结构
         # ==================================================
 
         self.deduplicate_schema(
+            schema
+        )
+
+        self.sync_compat(
             schema
         )
 
@@ -261,6 +303,388 @@ class SchemaAgent:
         return schema
 
     # ==================================================
+    # 字段角色分配：LLM 优先 → 关键词兜底 → unknown
+    # ==================================================
+
+    def assign_role(self, schema, field, llm_roles):
+
+        info = schema["fields"][field]
+
+        col = info["column"]
+
+        role = None
+
+        confidence = 0.0
+
+        reason = ""
+
+        unit = None
+
+        # ----------------------------------------------
+        # 1. LLM 识别结果（本 Sheet 一次调用）
+        # ----------------------------------------------
+
+        if llm_roles and col in llm_roles:
+
+            llm_info = llm_roles[col]
+
+            role = normalize_role(
+                llm_info.get("role") if isinstance(llm_info, dict) else llm_info
+            )
+
+            if role != "unknown":
+
+                confidence = 0.9
+
+                reason = (
+                    llm_info.get("reason", "")
+                    if isinstance(llm_info, dict)
+                    else "LLM识别"
+                )
+
+                if isinstance(llm_info, dict) and llm_info.get("unit"):
+
+                    unit = str(llm_info["unit"])
+
+        # ----------------------------------------------
+        # 2. 关键词兜底
+        # ----------------------------------------------
+
+        if role == "unknown" or not role:
+
+            keyword_role = self.classify_field(col)
+
+            if keyword_role != "unknown":
+
+                role = keyword_role
+
+                confidence = 0.7
+
+                reason = "关键词匹配"
+
+        # ----------------------------------------------
+        # 3. 仍无 → unknown（保留在 fields 中）
+        # ----------------------------------------------
+
+        if not role:
+
+            role = "unknown"
+
+            confidence = 0.3
+
+            reason = "无法识别"
+
+        # ----------------------------------------------
+        # 单位推断（金额字段）
+        # ----------------------------------------------
+
+        if role == "amount" and not unit:
+
+            unit = self.detect_unit(
+                col,
+                info.get("sample_values", [])
+            )
+
+        # ----------------------------------------------
+        # 包裹模式检测（如 【客商：xxx】）
+        # ----------------------------------------------
+
+        pattern = self.detect_pattern(
+            info.get("sample_values", [])
+        )
+
+        # ----------------------------------------------
+        # 聚合标记
+        # ----------------------------------------------
+
+        aggregate = role in METRIC_ROLES
+
+        # ----------------------------------------------
+        # 写入字段 + 角色索引
+        # ----------------------------------------------
+
+        info["role"] = role
+
+        info["role_confidence"] = round(confidence, 2)
+
+        info["role_reason"] = reason
+
+        info["unit"] = unit
+
+        info["pattern"] = pattern
+
+        info["aggregate"] = aggregate
+
+        schema["roles"][role].append(field)
+
+    # ==================================================
+    # LLM 角色识别（每 Sheet 一次调用）
+    #
+    # 成功 → 返回 {"列名": {"role", "unit", "reason"}}
+    # 失败 / 被禁用（DISABLE_LLM_SCHEMA=1）→ None
+    # ==================================================
+
+    def classify_roles_with_llm(
+        self,
+        sheet_name,
+        columns,
+        df,
+        user_query=""
+    ):
+
+        if not self.llm:
+            return None
+
+        if os.environ.get("DISABLE_LLM_SCHEMA") == "1":
+            print(
+                f"[SchemaAgent] DISABLE_LLM_SCHEMA=1，跳过 LLM 角色识别（{sheet_name}）"
+            )
+            return None
+
+        # ----------------------------------------------
+        # 构造输入：每列 2-3 个样本值
+        # ----------------------------------------------
+
+        lines = []
+
+        for column in columns:
+
+            col = str(column).strip()
+
+            if not col:
+                continue
+
+            samples = self.get_sample_values(
+                df[column],
+                limit=3
+            )
+
+            lines.append(
+                f"- {col}: {samples}"
+            )
+
+        prompt = f"""
+你是数据建模专家。下面是一个数据表的结构描述，请为每一列识别业务角色。
+
+表名: {sheet_name}
+用户问题: {user_query or "（无）"}
+
+列名及样本值:
+{chr(10).join(lines)}
+
+角色定义：
+- customer: 客户/客商/供应商/公司
+- business: 业务类型/产品线
+- product: 产品/商品/SKU
+- department: 部门/组织/事业部
+- project: 项目/工程
+- region: 地区/区域
+- person: 人员/姓名/员工
+- category: 其他分类（品类/类别/状态/方向）
+- amount: 金额（货币），unit 填单位（万元/元/千元，无法确定填 null）
+- number: 数量/比率/计数/评分
+- date: 日期/时间/年份/期间
+- id: 编码/编号/工号/单号
+- text: 备注/描述等自由文本
+
+输出 JSON（不要 markdown 代码块，不要解释）：
+{{"columns": [{{"column": "列名", "role": "角色", "unit": null, "reason": "一句话理由"}}]}}
+
+注意：
+1. 列数与输入一致，不得遗漏、不得新增
+2. "名称"类列按前缀判断：客商名称→customer，部门名称→department，产品名称→product
+3. 只有金额列才需要 unit；样本形如 100万 时可推断 unit=万
+4. 无法判断的列给 unknown
+"""
+
+        response = self.llm.chat_json([
+
+            {
+                "role": "system",
+                "content": "你是数据建模专家，只输出 JSON。"
+            },
+
+            {
+                "role": "user",
+                "content": prompt
+            }
+
+        ])
+
+        if not response:
+            print(
+                f"[SchemaAgent] LLM 角色识别失败（{sheet_name}），降级到关键词兜底"
+            )
+            return None
+
+        # ----------------------------------------------
+        # 解析并校验
+        # ----------------------------------------------
+
+        result = {}
+
+        raw_columns = response.get("columns", [])
+
+        if not isinstance(raw_columns, list):
+            return None
+
+        for item in raw_columns:
+
+            if not isinstance(item, dict):
+                continue
+
+            col = str(
+                item.get("column", "")
+            ).strip()
+
+            if not col or col not in [str(c).strip() for c in columns]:
+                continue
+
+            role = normalize_role(
+                item.get("role")
+            )
+
+            result[col] = {
+                "role": role,
+                "unit": item.get("unit") if role == "amount" else None,
+                "reason": str(item.get("reason", ""))[:100],
+            }
+
+        if not result:
+            return None
+
+        return result
+
+    # ==================================================
+    # 关键词兜底分类（打分制）
+    # ==================================================
+
+    def classify_field(self, col):
+
+        # pandas 对无列名列的自动命名，无业务含义
+        if col.startswith("Unnamed"):
+
+            return "unknown"
+
+        best_role = "unknown"
+
+        best_score = 0
+
+        for role, keywords in KEYWORD_ROLES.items():
+
+            score = sum(
+                1
+                for k in keywords
+                if k in col
+            )
+
+            if score > best_score:
+
+                best_score = score
+
+                best_role = role
+
+        return best_role
+
+    # ==================================================
+    # 金额单位推断
+    # ==================================================
+
+    def detect_unit(self, column, sample_values):
+
+        col = str(column)
+
+        for u in ("亿元", "千元", "万元", "元"):
+
+            if u in col:
+                return u
+
+        # 从样本值推断（如 100万、1.5亿）
+        for v in sample_values:
+
+            m = re.search(
+                r"(\d+(?:\.\d+)?)(万元|亿元|千元|万|亿|千|元)",
+                str(v)
+            )
+
+            if m:
+                u = m.group(2)
+                if u == "万":
+                    return "万元"
+                if u == "亿":
+                    return "亿元"
+                return u
+
+        return None
+
+    # ==================================================
+    # 包裹模式检测（样本确认后才生成）
+    # ==================================================
+
+    def detect_pattern(self, sample_values):
+
+        if not sample_values:
+            return None
+
+        prefixes = []
+
+        for v in sample_values:
+
+            m = self._PATTERN_RE.match(str(v))
+
+            if m:
+                prefixes.append(
+                    f"【{m.group('label')}："
+                )
+
+        if not prefixes:
+            return None
+
+        coverage = len(prefixes) / len(sample_values)
+
+        if coverage < 0.5:
+            return None
+
+        prefix = max(
+            set(prefixes),
+            key=prefixes.count
+        )
+
+        return {
+            "type": "prefix_suffix",
+            "prefix": prefix,
+            "suffix": "】",
+            "coverage": round(coverage, 2),
+        }
+
+    # ==================================================
+    # 同步兼容旧结构（entities/metrics/time_fields）
+    # ==================================================
+
+    def sync_compat(self, schema):
+
+        roles = schema["roles"]
+
+        schema["entities"]["customer"] = list(roles["customer"])
+        schema["entities"]["business"] = list(roles["business"])
+        schema["entities"]["product"] = list(roles["product"])
+        schema["entities"]["department"] = list(roles["department"])
+        schema["entities"]["project"] = list(roles["project"])
+
+        schema["metrics"]["money"] = list(roles["amount"])
+        schema["metrics"]["number"] = list(roles["number"])
+
+        schema["time_fields"] = list(roles["date"])
+
+        # 预留 _compat：所有消费方迁移到 roles 后，
+        # 顶层 entities/metrics/time_fields 与 _compat 一并删除
+        schema["_compat"] = {
+            "entities": schema["entities"],
+            "metrics": schema["metrics"],
+            "time_fields": schema["time_fields"],
+        }
+
+    # ==================================================
     # 获取样本值
     # ==================================================
 
@@ -288,264 +712,22 @@ class SchemaAgent:
             return []
 
     # ==================================================
-    # 字段分类
-    # ==================================================
-
-    def classify_field(
-        self,
-        schema,
-        sheet_name,
-        col
-    ):
-
-        field = (
-            f"{sheet_name}.{col}"
-        )
-
-        # ==================================================
-        # 客户
-        # ==================================================
-
-        customer_keywords = [
-
-            "客商名称",
-            "客商",
-            "客户名称",
-            "客户",
-            "客户编码",
-            "客商编码",
-            "客户编号",
-            "客商编号"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in customer_keywords
-        ):
-
-            schema["entities"][
-                "customer"
-            ].append(
-                field
-            )
-
-        # ==================================================
-        # 业务
-        # ==================================================
-
-        business_keywords = [
-
-            "业务种类",
-            "业务类型",
-            "业务名称",
-            "业务",
-            "产品业务",
-            "业务分类",
-            "业务类别"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in business_keywords
-        ):
-
-            schema["entities"][
-                "business"
-            ].append(
-                field
-            )
-
-        # ==================================================
-        # 产品
-        # ==================================================
-
-        product_keywords = [
-
-            "产品",
-            "商品",
-            "产品名称",
-            "商品名称",
-            "产品编码",
-            "商品编码"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in product_keywords
-        ):
-
-            schema["entities"][
-                "product"
-            ].append(
-                field
-            )
-
-        # ==================================================
-        # 部门
-        # ==================================================
-
-        department_keywords = [
-
-            "部门",
-            "事业部",
-            "部门名称",
-            "组织",
-            "组织名称",
-            "机构"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in department_keywords
-        ):
-
-            schema["entities"][
-                "department"
-            ].append(
-                field
-            )
-
-        # ==================================================
-        # 项目
-        # ==================================================
-
-        project_keywords = [
-
-            "项目",
-            "项目名称",
-            "项目编码",
-            "项目编号",
-            "工程名称",
-            "工程项目"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in project_keywords
-        ):
-
-            schema["entities"][
-                "project"
-            ].append(
-                field
-            )
-
-        # ==================================================
-        # 金额
-        # ==================================================
-
-        money_keywords = [
-
-            "金额",
-            "余额",
-            "销售额",
-            "销售金额",
-            "合同金额",
-            "收入",
-            "利润",
-            "贷方",
-            "借方",
-            "应收",
-            "应付",
-            "回款",
-            "万元",
-            "元",
-            "成本",
-            "费用",
-            "价格",
-            "单价",
-            "营业额"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in money_keywords
-        ):
-
-            schema["metrics"][
-                "money"
-            ].append(
-                field
-            )
-
-        # ==================================================
-        # 数值指标
-        # ==================================================
-
-        number_keywords = [
-
-            "数量",
-            "次数",
-            "销量",
-            "人数",
-            "面积",
-            "比例",
-            "率",
-            "增长",
-            "占比",
-            "排名",
-            "数量"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in number_keywords
-        ):
-
-            schema["metrics"][
-                "number"
-            ].append(
-                field
-            )
-
-        # ==================================================
-        # 时间
-        # ==================================================
-
-        time_keywords = [
-
-            "日期",
-            "时间",
-            "月份",
-            "月份",
-            "年份",
-            "年度",
-            "期间",
-            "账期",
-            "季度",
-            "年",
-            "月"
-
-        ]
-
-        if any(
-            keyword in col
-            for keyword in time_keywords
-        ):
-
-            schema[
-                "time_fields"
-            ].append(
-                field
-            )
-
-    # ==================================================
-    # 去重
-    # ==================================================
-
     def deduplicate_schema(
         self,
         schema
     ):
 
-        # entities
+        # roles（唯一事实来源）
+
+        for role in schema["roles"]:
+
+            schema["roles"][role] = list(
+                dict.fromkeys(
+                    schema["roles"][role]
+                )
+            )
+
+        # entities（兼容层）
 
         for category in schema[
             "entities"
@@ -561,7 +743,7 @@ class SchemaAgent:
                 )
             )
 
-        # metrics
+        # metrics（兼容层）
 
         for category in schema[
             "metrics"
@@ -577,7 +759,7 @@ class SchemaAgent:
                 )
             )
 
-        # time
+        # time（兼容层）
 
         schema[
             "time_fields"
@@ -1605,84 +1787,47 @@ class SchemaAgent:
         )
 
         print(
-            "\n【客户字段】"
+            "\n【字段角色】"
         )
 
+        for role in ALL_ROLES:
+
+            fields = schema["roles"].get(
+                role,
+                []
+            )
+
+            if fields:
+
+                print(
+                    f"  {ROLE_LABELS.get(role, role)}: "
+                    f"{fields}"
+                )
+
+        # 逐字段展示（角色 / 单位 / 包裹模式）
         print(
-            schema[
-                "entities"
-            ]["customer"]
+            "\n【字段明细】"
         )
 
-        print(
-            "\n【业务字段】"
-        )
+        for field, info in schema["fields"].items():
 
-        print(
-            schema[
-                "entities"
-            ]["business"]
-        )
+            unit = (
+                f", unit={info['unit']}"
+                if info.get("unit")
+                else ""
+            )
 
-        print(
-            "\n【产品字段】"
-        )
+            pattern = (
+                f", pattern={info['pattern']}"
+                if info.get("pattern")
+                else ""
+            )
 
-        print(
-            schema[
-                "entities"
-            ]["product"]
-        )
-
-        print(
-            "\n【部门字段】"
-        )
-
-        print(
-            schema[
-                "entities"
-            ]["department"]
-        )
-
-        print(
-            "\n【项目字段】"
-        )
-
-        print(
-            schema[
-                "entities"
-            ]["project"]
-        )
-
-        print(
-            "\n【金额字段】"
-        )
-
-        print(
-            schema[
-                "metrics"
-            ]["money"]
-        )
-
-        print(
-            "\n【数值字段】"
-        )
-
-        print(
-            schema[
-                "metrics"
-            ]["number"]
-        )
-
-        print(
-            "\n【时间字段】"
-        )
-
-        print(
-            schema[
-                "time_fields"
-            ]
-        )
+            print(
+                f"  {field} → {info.get('role', 'unknown')}"
+                f" ({info.get('role_reason', '')}, "
+                f"conf={info.get('role_confidence', 0)}){unit}{pattern}"
+            )
 
         print(
             "\n【Sheet关系】"

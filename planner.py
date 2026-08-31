@@ -159,9 +159,61 @@ class TaskPlanner:
         }
 
     # ==========================================================
+    # 构造 Schema 摘要文本（注入 Planner Prompt）
+    # ==========================================================
+    def build_schema_summary_text(self, schema_summary):
+        """
+        schema_summary 结构（由 agent.prepare_context 构造）：
+        {
+            "sheets": ["Sheet1", ...],
+            "metric_fields": ["期末余额", ...],      # amount + number
+            "dimension_fields": {"customer": [...], ...},
+            "samples": {"列名": ["样本1", "样本2"]}    # 每列 2 个样本
+        }
+        """
+        if not schema_summary:
+            return "（未提供数据字段概况）"
+
+        lines = []
+
+        metric_fields = schema_summary.get("metric_fields", []) or []
+
+        if metric_fields:
+            lines.append(
+                f"指标字段（金额/数量）: {metric_fields}"
+            )
+        else:
+            lines.append(
+                "指标字段（金额/数量）: （无）"
+            )
+
+        dim_fields = schema_summary.get("dimension_fields", {}) or {}
+
+        for role, fields in dim_fields.items():
+
+            if fields:
+                lines.append(
+                    f"{role}字段: {fields}"
+                )
+
+        sheets = schema_summary.get("sheets", []) or []
+
+        if sheets:
+            lines.append(
+                f"数据表: {sheets}"
+            )
+
+        return "\n".join(lines)
+
+    # ==========================================================
     # 创建Planner Prompt
     # ==========================================================
-    def build_prompt(self, user_query, tools):
+    def build_prompt(self, user_query, tools, schema_summary=None):
+
+        schema_summary_text = self.build_schema_summary_text(
+            schema_summary
+        )
+
         prompt = f"""
 你是一个企业级AI数据分析Agent的任务规划器。
 
@@ -287,24 +339,27 @@ class TaskPlanner:
 当用户的问题属于"分析、评价、判断、展望"类，且**没有指定具体客户或具体指标**时（例如：发展前景、经营状况、合作价值、风险评估、哪个最好、谁最优秀），
 你**必须**按以下优先级处理，**严禁**使用 query_value 进行全表查询。
 
-优先级一：识别隐含的分析维度
-将模糊问题映射为具体的数值指标。通常，财务数据分析中：
-- "发展前景"、"经营状况"、"盈利能力" → 映射为"期末余额"或"本期贷方"
-- "客户价值"、"合作价值" → 映射为"期末余额"或"贷方累计"
-- "业务活跃度" → 映射为"本期贷方"或"业务种类计数"
+优先级一：从数据实际存在的指标字段中选择
+下面是当前数据的字段概况（真实存在的列）：
+
+{schema_summary_text}
+
+你只能从上述"指标字段"（金额/数量类）中挑选 1-2 个最贴合用户语义的字段填入 metrics，
+严禁编造数据中不存在的字段名。指标字段带单位时（如 万元），字段名不含单位。
 
 优先级二：生成排名任务
-使用 rank_rows 工具，按映射后的指标进行汇总排名。
+使用 rank_rows 工具，按挑选的指标进行汇总排名。
 
 必须遵循的生成规则：
 1. 工具：固定为 "tool": "rank_rows"
-2. 指标 (metrics)：根据上述映射，选择最合适的金额字段。如果用户没有明确指定，默认使用"期末余额"。
+2. 指标 (metrics)：从数据实际指标字段中选择 1-2 个最合适的。优先选择含义接近"余额/累计/总额"的字段。如果用户没有明确指标，选择数据中第一个金额字段；数据没有金额字段时 metrics 可以为空 []，rank_rows 会按数量类字段或全表排序。
 3. 排名条件 (condition)：默认 "order": "desc"（从高到低），"limit": 10（取前10名）。如果用户提到"前几名"或"TOP N"，则按实际数字调整。
 4. 客户 (customer)：如果用户没有指定具体客户，留空 ""。
-5. 过滤条件 (filters)：如果用户提到年份或业务类型，则填入，否则留空 {{}}。
+5. 过滤条件 (filters)：如果用户提到年份或业务类型等，填入数据中真实存在的业务概念，否则留空 {{}}。
 
 示例：
 用户问："哪个公司发展前景好？"
+数据指标字段：["期末余额", "本期贷方", "贷方累计", "数量"]
 应返回：
 [
   {{
@@ -320,14 +375,15 @@ class TaskPlanner:
 ]
 
 用户问："2025年哪些客户收入最高？"
+数据指标字段：["销售额", "订单量"]
 应返回：
 [
   {{
     "tool": "rank_rows",
-    "reason": "按2025年本期贷方排名，找出收入最高客户",
+    "reason": "按2025年销售额排名，找出收入最高客户",
     "customer": "",
-    "metrics": ["本期贷方"],
-    "filters": {{"时间": "2025"}},
+    "metrics": ["销售额"],
+    "filters": {{"年份": "2025"}},
     "compare": {{}},
     "condition": {{"order": "desc", "limit": 10}},
     "output": "rows"
@@ -335,9 +391,9 @@ class TaskPlanner:
 ]
 
 禁止行为：
-- 禁止返回空 metrics。
+- 禁止使用指标字段中不存在、或字段概况中未出现的字段名。
 - 禁止使用 query_value 处理模糊问题（除非用户明确要求查看明细）。
-- 如果无法从问题中推断出任何指标，则使用默认指标"期末余额"。
+- 如果数据完全没有金额字段，metrics 可以为空 []（rank_rows 会降级处理），但不要编造指标名。
 
 
 
@@ -373,7 +429,7 @@ class TaskPlanner:
     # ==========================================================
     # 创建任务计划
     # ==========================================================
-    def create_plan(self, user_query: str):
+    def create_plan(self, user_query: str, schema_summary=None):
         if user_query is None:
             raise ValueError("用户需求不能为空")
         user_query = str(user_query).strip()
@@ -381,7 +437,16 @@ class TaskPlanner:
             raise ValueError("用户需求不能为空")
 
         tools = tool_registry.list_tools()
-        prompt = self.build_prompt(user_query, tools)
+
+        schema_summary_text = self.build_schema_summary_text(
+            schema_summary
+        )
+
+        prompt = self.build_prompt(
+            user_query,
+            tools,
+            schema_summary
+        )
 
         messages = [
             {"role": "system", "content": """
@@ -419,12 +484,15 @@ class TaskPlanner:
         except Exception as e:
             self.logger.error(f"Planner失败: {e}")
             print("\nPlanner失败:", e)
-            return self.fallback_plan(user_query)
+            return self.fallback_plan(user_query, schema_summary)
 
     # ==========================================================
     # Fallback
+    #
+    # 通用化：不再硬编码"期末余额"等财务字段，模糊分析统一
+    # 生成 rank_rows + metrics=[]，由工具层从 schema 补齐指标。
     # ==========================================================
-    def fallback_plan(self, query):
+    def fallback_plan(self, query, schema_summary=None):
         query = str(query).strip()
 
         # 模糊分析关键词 (新增)
@@ -437,9 +505,9 @@ class TaskPlanner:
             return [
                 {
                     "tool": "rank_rows",
-                    "reason": "根据模糊分析需求，按期末余额排名评估客户",
+                    "reason": "根据模糊分析需求，按主要指标排名评估（指标由工具层从schema补齐）",
                     "customer": "",
-                    "metrics": ["期末余额"],
+                    "metrics": [],
                     "filters": {},
                     "compare": {},
                     "condition": {"order": "desc", "limit": 10},
