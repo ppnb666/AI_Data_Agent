@@ -21,16 +21,41 @@ def find_customer_field(schema, columns):
     return None
 
 
-def rank_rows_tool(state):
+def rank_rows_tool(state, task=None):
     """
     按客户分组汇总指定的指标字段，并排序返回前N条记录。
+
+    修复说明：
+    此前该函数不接收当前任务，而是自己回头去 state.plan 里按
+    tool == "rank_rows" 搜索第一个匹配项。如果一次 plan 里有
+    多个 rank_rows 任务（例如"分别按销售额和按数量排名"），
+    永远只会执行第一个，其余的会被静默忽略。
+
+    现在优先读取 state.current_task —— Executor在每次调用工具前
+    会把"当前正在执行的task"写入state.current_task（见agent.py
+    execute_plan），这样能保证多任务场景下每次调用处理的都是
+    正确的那一条任务，而不是永远命中第一条同类型任务。
+
+    仍支持显式传入task参数（更直接、不依赖state），以及旧的
+    state.plan搜索方式作为最后的兼容兜底。
     """
-    # 获取当前任务
-    task = None
-    for t in getattr(state, "plan", []):
-        if t.get("tool") == "rank_rows":
-            task = t
-            break
+    if task is None:
+        task = getattr(state, "current_task", None)
+        if task is not None and task.get("tool") != "rank_rows":
+            task = None
+
+    if task is None:
+        import warnings
+        warnings.warn(
+            "rank_rows_tool 未收到state.current_task，回退到旧的"
+            "state.plan搜索方式，若一次计划中有多个rank_rows"
+            "任务，只会执行第一个。"
+        )
+        for t in getattr(state, "plan", []):
+            if t.get("tool") == "rank_rows":
+                task = t
+                break
+
     if not task:
         return {"type": "rank_rows", "status": "failed", "message": "未找到rank_rows任务"}
 

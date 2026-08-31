@@ -1,18 +1,36 @@
 import pandas as pd
 
 
-def clean_data(df):
+def clean_data(df, key_columns=None):
     """
     数据清洗：
     1. 删除重复数据
-    2. 删除缺失数据
+    2. 删除关键字段缺失的数据
+
+    修复说明：
+    此前用无参数的 df.dropna()，会因为任意一列（哪怕是备注、
+    次要联系方式这类本来就允许为空的字段）有空值就删掉整行，
+    在企业Excel场景下很容易误删大量本该保留的正常数据。
+
+    现在改为：默认只删除"整行全部为空"的行（drop_duplicates后
+    的正常清洗），如果调用方传入 key_columns（比如销售额列、
+    客户名称列这些真正不该为空的关键字段），才对这些列做
+    dropna，其余字段允许为空。
     """
 
     before = len(df)
 
     df = df.drop_duplicates()
 
-    df = df.dropna()
+    if key_columns:
+        # 只有真正指定了"哪些字段不能为空"时，才按这些字段清洗
+        existing_key_columns = [c for c in key_columns if c in df.columns]
+        if existing_key_columns:
+            df = df.dropna(subset=existing_key_columns)
+    else:
+        # 未指定关键字段时，只删除整行全部为空的记录，
+        # 不再无差别删除"任意一列有空值"的行
+        df = df.dropna(how="all")
 
     after = len(df)
 

@@ -28,8 +28,17 @@ def clean_data_tool(state):
     """
 
 
+    # 修复：不再无差别删除"任意一列有空值"的行，
+    # 只对真正关键的字段（销售额、产品名）做缺失值清洗，
+    # 其它字段（如备注）允许为空，避免误删正常数据。
+    key_columns = [
+        c for c in [state.sales_col, state.product_col]
+        if c
+    ]
+
     result, count = clean_data(
-        state.df
+        state.df,
+        key_columns=key_columns
     )
 
 

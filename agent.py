@@ -65,6 +65,11 @@ class DataAgent:
             self,
             state
     ):
+        """
+        数据准备阶段（修复：此前此方法体内嵌套定义了一个同名的
+        内部 prepare_context 函数，导致清洗逻辑从未被执行。
+        现在合并为单一版本，清洗步骤真正生效。）
+        """
 
         self.logger.info(
             f"读取数据文件:{state.file_path}"
@@ -121,7 +126,7 @@ class DataAgent:
         )
 
         # ==================================================
-        # 数据理解
+        # 数据理解（DataProfiler分析）
         # ==================================================
 
         data_schema = self.data_profiler.analyze(
@@ -137,72 +142,31 @@ class DataAgent:
         print(data_schema)
 
         # ==================================================
-        # 数据画像
+        # 获取清洗建议并执行（修复：此前被困在一个从未被调用的
+        # 内部函数里，现在提到外层，真正会被执行）
         # ==================================================
 
-        def prepare_context(self, state):
-            self.logger.info(f"读取数据文件:{state.file_path}")
+        quality_report = data_schema.get("quality_report", {})
+        clean_suggestions = data_schema.get("clean_suggestions", {})
 
-            from utils.excel_loader import load_excel
+        state.data_quality_report = quality_report
+        state.clean_suggestions = clean_suggestions
 
-            sheets = load_excel(state.file_path)
-            state.sheet_profiles = sheets
+        overall_score = quality_report.get("overall_score", 100)
 
-            print("\n📂 Excel Sheet数量:", len(sheets))
+        if overall_score < 80:
+            print(f"\n🧹 数据质量评分: {overall_score}，自动执行清洗...")
+            state.df = DataProfilerAgent.apply_clean_suggestions(
+                state.df,
+                clean_suggestions
+            )
+            print(f"   清洗后数据: {len(state.df)} 行")
+        else:
+            print(f"\n✅ 数据质量评分: {overall_score}，质量良好，无需清洗")
 
-            # ==================================================
-            # Schema理解
-            # ==================================================
-            schema = self.schema_agent.analyze(sheets)
-            state.workbook_schema = schema
-            print("\n📚 Excel结构理解:")
-            print(schema)
-
-            # ==================================================
-            # 选择Sheet
-            # ==================================================
-            selected = self.data_profiler.select_sheet(sheets, state.user_query)
-            if not selected:
-                selected = sheets[0]
-            state.df = selected["df"]
-            state.sheet_name = selected["sheet"]
-
-            self.logger.info(f"当前Sheet:{state.sheet_name}")
-
-            # ==================================================
-            # 数据理解（DataProfiler分析）
-            # ==================================================
-            data_schema = self.data_profiler.analyze(state.df)
-            state.schema = data_schema
-
-            print("\n📚 AI数据理解:")
-            print(data_schema)
-
-            # ==================================================
-            # 【新增】获取清洗建议并执行
-            # ==================================================
-            quality_report = data_schema.get("quality_report", {})
-            clean_suggestions = data_schema.get("clean_suggestions", {})
-
-            if quality_report.get("overall_score", 100) < 80:
-                print(f"\n🧹 数据质量评分: {quality_report.get('overall_score')}，自动执行清洗...")
-                state.df = DataProfilerAgent.apply_clean_suggestions(state.df, clean_suggestions)
-                print(f"   清洗后数据: {len(state.df)} 行")
-            else:
-                print(f"\n✅ 数据质量评分: {quality_report.get('overall_score')}，质量良好，无需清洗")
-
-            # ==================================================
-            # 数据画像
-            # ==================================================
-            state.data_profile = profile_dataframe(state.df)
-
-            # ==================================================
-            # 自动识别字段
-            # ==================================================
-            columns = detect_columns(state.df)
-            state.sales_col = columns.get("sales_column")
-            state.product_col = columns.get("product_column")
-            state.date_col = columns.get("date_column")
+        # ==================================================
+        # 数据画像
+        # ==================================================
 
         state.data_profile = profile_dataframe(
             state.df
@@ -588,7 +552,14 @@ class DataAgent:
 
                 # ==================================================
                 # 每次执行工具前，将当前任务参数同步到State
+                # 【修复】同时把当前task本身也存到state.current_task，
+                # 这样像rank_rows_tool这类工具就能直接读取当前正在
+                # 执行的任务，而不用回头去state.plan里按tool名字
+                # 搜索——避免一次plan里有多个同类型任务时只处理到
+                # 第一个的问题。
                 # ==================================================
+
+                state.current_task = task
 
                 state.customer = task.get(
                     "customer",

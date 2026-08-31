@@ -24,7 +24,6 @@ class AgentState:
         # 用户请求
 
         self.user_query = ""
-        self.query_result = {}
 
         self.data_quality_report = {}  # 数据质量报告
         self.clean_suggestions = {}  # 清洗建议
@@ -45,6 +44,10 @@ class AgentState:
         # 当前执行工具
 
         self.current_tool = None
+
+        # 当前正在执行的task（修复rank_rows_tool等工具需要读取
+        # 当前task而非回头搜索state.plan的问题）
+        self.current_task = None
 
 
 
@@ -75,8 +78,6 @@ class AgentState:
         self.top_sales = 0
 
         self.outliers = []
-
-        self.query_result = None
 
 
 

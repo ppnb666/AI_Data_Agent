@@ -163,20 +163,55 @@ def find_date_column(df):
         return col
 
 
-    # 自动日期检测
+    # ==================================================
+    # 自动日期检测（修复）
+    #
+    # 此前用 try: pd.to_datetime(df[col]) except: pass 来判断
+    # 一列是不是日期，但纯数字列（订单编号、金额、Excel序列号）
+    # 也常常能被 pd.to_datetime 成功解析（当成Unix时间戳/序列号
+    # 处理），导致把ID列或金额列误判成日期列。后续画趋势图会
+    # 全部基于错误的列，运行不报错，但结果是错的。
+    #
+    # 现在只在以下两种更可靠的情况下才自动判定为日期列：
+    # 1. 该列本身的 dtype 已经是 datetime 类型
+    # 2. 该列是字符串/object类型，且转换成功率高（缺失值除外），
+    #    同时不是纯数字字符串（纯数字更可能是ID或金额，
+    #    而不是日期文本）
+    # 不再对数值型（int/float）列做兜底日期猜测。
+    # ==================================================
 
     for col in df.columns:
 
-        try:
+        series = df[col]
 
-            pd.to_datetime(df[col])
-
+        # 情况1：已经是datetime类型，直接认定
+        if pd.api.types.is_datetime64_any_dtype(series):
             return col
 
-        except:
+        # 跳过纯数值类型列，避免把金额/编号误判为日期
+        if pd.api.types.is_numeric_dtype(series):
+            continue
 
-            pass
+        # 情况2：文本类型，尝试转换，且要求足够高的成功率
+        non_null = series.dropna()
+        if len(non_null) == 0:
+            continue
 
+        # 纯数字字符串（如"20230101"这种可能是日期，
+        # 但"1001"这种更像编号）交给关键词匹配去判断，
+        # 这里不再兜底猜测，避免误判ID列
+        if non_null.astype(str).str.fullmatch(r"\d+").mean() > 0.5:
+            continue
+
+        try:
+            parsed = pd.to_datetime(non_null, errors="coerce")
+        except Exception:
+            continue
+
+        success_rate = parsed.notna().mean()
+
+        if success_rate >= 0.9:
+            return col
 
     return None
 
