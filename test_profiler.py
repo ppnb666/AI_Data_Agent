@@ -10,8 +10,8 @@
 import pandas as pd
 import pytest
 
-from analysis import clean_data
-from data_parser import find_date_column
+from utils.analysis import clean_data
+from utils.data_parser import find_date_column
 
 
 # ==========================================================
@@ -99,7 +99,7 @@ def test_rank_rows_tool_uses_current_task_over_plan_order():
     当plan中有多个rank_rows任务时，应使用state.current_task
     指定的那一个，而不是永远取plan里第一个匹配项。
     """
-    from rank_tools import rank_rows_tool
+    from tools.rank_tools import rank_rows_tool
 
     task_a = {"tool": "rank_rows", "metrics": ["销售额"]}
     task_b = {"tool": "rank_rows", "metrics": ["数量"]}
@@ -113,7 +113,7 @@ def test_rank_rows_tool_uses_current_task_over_plan_order():
 
 
 def test_rank_rows_tool_falls_back_to_plan_when_no_current_task():
-    from rank_tools import rank_rows_tool
+    from tools.rank_tools import rank_rows_tool
 
     task_a = {"tool": "rank_rows", "metrics": ["销售额"]}
     state = _FakeState(plan=[task_a], current_task=None)

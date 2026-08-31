@@ -1,0 +1,93 @@
+{
+  "generated_by": "scripts/regression.py",
+  "cases": {
+    "合同-精确查询": {
+      "query": "查保利长大工程有限公司的期末余额",
+      "result_type": "query_value",
+      "total_count": 101,
+      "rows_count": 100,
+      "summary": {
+        "期末余额总额": 21612850.63
+      },
+      "ai_insight_len": 940
+    },
+    "合同-模糊分析": {
+      "query": "哪个公司发展前景好？",
+      "result_type": "rank_rows",
+      "total_count": 1487,
+      "rows_count": 10,
+      "summary": null,
+      "ai_insight_len": 1880
+    },
+    "合同-字段比较": {
+      "query": "查保利长大工程有限公司的公路建设期产品运维(JSYW)的本期贷方和贷方累计是否相等",
+      "result_type": "compare_rows",
+      "total_count": 93,
+      "rows_count": 83,
+      "summary": null,
+      "compare": {
+        "left": "本期贷方",
+        "right": "贷方累计",
+        "operator": "=="
+      },
+      "ai_insight_len": 2793
+    },
+    "合同-排名": {
+      "query": "按期末余额从高到低给客商排名",
+      "result_type": "rank_rows",
+      "total_count": 1487,
+      "rows_count": 10,
+      "summary": null,
+      "ai_insight_len": 1841
+    },
+    "合同-质量检测": {
+      "query": "检查数据质量",
+      "note": "自定义用例（无 query_result）",
+      "clean_suggestions": {
+        "recommendations": [
+          {
+            "level": "critical",
+            "message": "数据质量一般，建议在分析前执行推荐的清洗操作"
+          }
+        ],
+        "actions": {
+          "业务种类": [
+            {
+              "type": "drop_rows",
+              "condition": "业务种类 is null",
+              "reason": "空值率 53.13% 过高，建议删除这些行"
+            }
+          ],
+          "期初余额": [
+            {
+              "type": "drop_rows",
+              "condition": "期初余额 is null",
+              "reason": "空值率 95.08% 过高，建议删除这些行"
+            }
+          ],
+          "本期贷方": [
+            {
+              "type": "fill_null",
+              "method": "mode",
+              "reason": "空值率 12.72% 适中，建议用众数填充"
+            }
+          ],
+          "Unnamed: 7": [
+            {
+              "type": "drop_rows",
+              "condition": "Unnamed: 7 is null",
+              "reason": "空值率 97.77% 过高，建议删除这些行"
+            }
+          ],
+          "Unnamed: 8": [
+            {
+              "type": "drop_rows",
+              "condition": "Unnamed: 8 is null",
+              "reason": "空值率 99.79% 过高，建议删除这些行"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

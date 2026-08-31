@@ -4,21 +4,7 @@
 
 import pandas as pd
 
-
-def find_customer_field(schema, columns):
-    """根据Schema寻找客户字段，与 query_tools 中的一致"""
-    customer_fields = []
-    entities = schema.get("entities", {})
-    customer_fields = [field.split(".")[-1] for field in entities.get("customer", [])]
-    for field in customer_fields:
-        if field in columns:
-            return field
-    # 兜底关键词
-    keywords = ["客商名称", "客户名称", "客户", "客商"]
-    for col in columns:
-        if any(k in str(col) for k in keywords):
-            return col
-    return None
+from tools.field_resolver import find_customer_field
 
 
 def rank_rows_tool(state, task=None):
@@ -81,8 +67,9 @@ def rank_rows_tool(state, task=None):
         sheet_name = sheet["sheet"]
         columns = list(df.columns)
 
-        # 找客户字段
-        customer_field = find_customer_field(schema, columns)
+        # 找客户字段（修复：改用统一的field_resolver，优先读取
+        # state.mapping中用户手动确认过的映射，而不是只看schema猜测）
+        customer_field = find_customer_field(state, schema, columns)
         if not customer_field:
             continue
 

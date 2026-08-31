@@ -1,5 +1,7 @@
 import pandas as pd
 
+from tools.field_resolver import find_customer_field as _resolve_customer_field
+
 
 # ==========================================================
 # Schema字段处理
@@ -243,51 +245,24 @@ def match_field(
 
 # ==========================================================
 # 找客户字段
+#
+# 修复：此前这里是独立实现（schema猜测 + 关键词兜底两层），
+# 与 rank_tools.py / compare_tools.py 里几乎一样的代码各自维护
+# 一份，且都没有读取用户在前端确认过的 state.mapping。
+# 现在改为统一委托给 field_resolver.find_customer_field，
+# 优先级变为：state.mapping（用户确认） → schema猜测 → 关键词兜底。
 # ==========================================================
 
 def find_customer_field(
+    state,
     schema,
     columns
 ):
     """
-    根据Schema寻找当前Sheet中的客户字段。
+    寻找当前Sheet中的客户字段。
+    委托给field_resolver统一处理，保留函数名以兼容本文件内其它调用。
     """
-
-    customer_fields = get_schema_fields(
-        schema,
-        "customer"
-    )
-
-    # ------------------------------------------------------
-    # 1. Schema优先
-    # ------------------------------------------------------
-
-    for field in customer_fields:
-
-        if field in columns:
-            return field
-
-    # ------------------------------------------------------
-    # 2. 兜底
-    # ------------------------------------------------------
-
-    customer_keywords = [
-        "客商名称",
-        "客户名称",
-        "客户",
-        "客商"
-    ]
-
-    for column in columns:
-
-        if any(
-            keyword in str(column)
-            for keyword in customer_keywords
-        ):
-
-            return column
-
-    return None
+    return _resolve_customer_field(state, schema, columns)
 
 
 # ==========================================================
@@ -891,10 +866,12 @@ def query_value_tool(state):
         columns = list(df.columns)
 
         # --------------------------------------------------
-        # 客户字段
+        # 客户字段（修复：改用统一的field_resolver，优先读取
+        # state.mapping中用户手动确认过的映射）
         # --------------------------------------------------
 
         customer_field = find_customer_field(
+            state,
             schema,
             columns
         )

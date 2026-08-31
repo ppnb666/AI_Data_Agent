@@ -1,18 +1,7 @@
 import re
 import pandas as pd
 
-
-def clean_field(field):
-    """
-    去除 Schema 字段前缀
-
-    Sheet1.客商名称 -> 客商名称
-    """
-
-    if "." in field:
-        return field.split(".")[-1]
-
-    return field
+from tools.field_resolver import find_customer_field, clean_field
 
 
 def get_compare_task(state):
@@ -20,26 +9,6 @@ def get_compare_task(state):
 
         if task.get("tool") == "compare_rows":
             return task
-
-    return None
-
-
-def find_customer_field(schema, columns):
-    """
-    根据 Schema 自动寻找当前 Sheet 的客户字段
-    """
-
-    customer_fields = [
-        clean_field(x)
-        for x in
-        schema.get("entities", {})
-        .get("customer", [])
-    ]
-
-    for field in customer_fields:
-
-        if field in columns:
-            return field
 
     return None
 
@@ -608,10 +577,12 @@ def compare_rows_tool(state):
         )
 
         # ----------------------------------------------
-        # 找客户字段
+        # 找客户字段（修复：改用统一的field_resolver，优先读取
+        # state.mapping中用户手动确认过的映射）
         # ----------------------------------------------
 
         customer_field = find_customer_field(
+            state,
             schema,
             columns
         )
