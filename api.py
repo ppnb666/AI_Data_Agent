@@ -123,7 +123,10 @@ def parse_llm_response(response: str) -> Dict[str, Optional[str]]:
 
     try:
         data = json.loads(text)
-        allowed_keys = {"customer", "amount", "business", "date", "product", "department", "project"}
+        # 角色集合从 schema.roles.LLM_ALLOWED_ROLES 动态获取，
+        # 避免新角色（region/person/category 等）漏掉（不含 unknown）
+        from schema.roles import LLM_ALLOWED_ROLES
+        allowed_keys = set(LLM_ALLOWED_ROLES)
         result = {k: data.get(k) for k in allowed_keys}
         # 将空字符串转为 None
         for k in result:
