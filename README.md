@@ -76,11 +76,10 @@ FastAPI 接口层
 AI Agent 核心层
     |
     ├── Planner          → 用户需求 → 查询任务(JSON)
-    ├── Schema Agent     → Excel结构理解 / 字段映射
-    ├── Data Profiler    → 数据质量检测 / 自动清洗
-    ├── Executor         → 根据任务调用工具
+    ├── Schema Agent     → 数据结构理解 / 字段角色识别（LLM→关键词兜底）
+    ├── Data Profiler    → 数据质量检测 / 自动清洗 / Sheet选择
     |
-Tools 工具执行层
+Tools 工具执行层（由 Agent 直接驱动工具注册表）
     ├── query_value      → 精确查询
     ├── compare_rows     → 字段比较
     ├── rank_rows        → 分组排名
@@ -105,36 +104,39 @@ AI_Data_Agent/
 ├── config.py                # 配置文件
 │
 ├── llm/
-│   └── client.py            # DeepSeek API 封装
+│   └── client.py            # DeepSeek API 封装（chat / chat_json）
 │
 ├── schema/
-│   └── schema_agent.py      # Excel 结构分析
+│   ├── schema_agent.py      # 数据结构理解 / 字段角色识别（LLM→关键词兜底）
+│   ├── roles.py             # 角色常量表（角色枚举、LLM 允许角色）
+│   └── keyword_roles.py     # 关键词兜底词表（中英文）
 │
 ├── profiler/
-│   └── data_profiler_agent.py  # 数据质量检测 + 清洗
+│   └── data_profiler_agent.py  # 数据质量检测 + 清洗 + Sheet 选择
 │
-├── executor/
-│   └── executor.py          # 工具执行调度
-│
-├── tools/
-│   ├── query_tools.py       # 数据查询工具
-│   ├── compare_tools.py     # 字段比较工具
-│   ├── rank_tools.py        # 排名工具
-│   ├── data_tools.py        # 数据清洗分析
-│   ├── report_tools.py      # 报告生成
-│   ├── chart_tools.py       # 数据可视化
+├── tools/                   # 工具注册表（Agent 直接驱动）
+│   ├── query_tools.py       # 精确查询 / 汇总统计
+│   ├── compare_tools.py     # 字段比较
+│   ├── rank_tools.py        # 分组排名
+│   ├── field_resolver.py    # 字段解析（mapping → schema → 关键词）
 │   └── registry.py          # 工具注册管理
 │
 ├── utils/
-│   ├── excel_loader.py      # Excel 读取
-│   ├── data_parser.py       # 字段解析
+│   ├── data_loader.py       # 多格式加载（xlsx/xls/csv/json）
+│   ├── excel_loader.py      # Excel 读取 + 表头启发式检测
 │   ├── data_profiler.py     # 数据画像
+│   ├── numbers.py           # 数值解析（中文单位/千分位/货币符号）
 │   ├── logger.py            # 日志系统
-│   ├── trace.py             # 执行轨迹追踪
-│   └── visualization.py     # 图表生成
+│   └── trace.py             # 执行轨迹追踪
 │
-├── data/                    # 数据文件目录
-│   └── 合同.xlsx
+├── scripts/
+│   ├── regression.py        # 合同.xlsx 回归测试
+│   └── verify_samples.py    # 员工.csv / 库存.json 通用性验证
+│
+├── data/                    # 数据文件目录（本地）
+│   ├── 合同.xlsx            # 财务示例（可替换为任意业务数据）
+│   ├── 员工.csv             # 人事示例
+│   └── 库存.json            # 库存示例
 │
 ├── reports/                 # 报告输出目录
 ├── logs/                    # 日志目录
@@ -154,7 +156,7 @@ AI_Data_Agent/
 | 编程语言 | Python 3.10+ |
 | 数据处理 | Pandas、Openpyxl |
 | 大语言模型 | DeepSeek API |
-| Agent 架构 | Planner-Executor |
+| Agent 架构 | Planner + Schema Agent + Data Profiler + 工具注册表 |
 | 数据理解 | Schema Agent |
 | 数据质量 | Data Profiler（自动检测+清洗） |
 | 可视化 | Matplotlib |
